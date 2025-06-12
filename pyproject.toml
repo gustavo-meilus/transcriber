@@ -1,0 +1,19 @@
+[project]
+name = "transcript"
+version = "0.1.0"
+description = "Audio transcription tools for live and file-based transcription with English and Portuguese support"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy",
+    "sounddevice>=0.5.2",
+    "faster-whisper",
+    "scipy",
+    "tqdm",
+]
+
+[project.scripts]
+transcript = "transcript_pkg.cli:main"
+
+[tool.setuptools]
+packages = ["transcript_pkg"]
