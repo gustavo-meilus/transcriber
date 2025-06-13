@@ -1,0 +1,6 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+Always keep the code clean, concise, follow the PEP8 standards and best practices and avoid as much as possible nested conditions adopting better strategies like creating functions to contain nested logics. After all changes are done always run the command "ruff format && ruff check --fix" and if there's errors unfixed, fix it before proceed. Always check this rules and instructions after you done a code.

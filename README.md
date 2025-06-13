@@ -19,6 +19,7 @@ A unified CLI tool for audio transcription with support for English and Portugue
 - **Flexible Input** - Support for both single files and directories
 - **Live Transcription Export** - Save live sessions to file with optional timestamps
 - **High-Quality Models** - Support for models from tiny (39MB) to large (1.5GB)
+- **Debug Mode**: Detailed statistics for developers to diagnose timing issues
 
 ## 🚀 Quick Start
 
@@ -59,19 +60,6 @@ See [INSTALL.md](INSTALL.md) for detailed installation instructions.
 ### Usage
 
 The `transcript` command provides two main modes: `live` for real-time transcription and `file` for batch processing.
-
-When you run the tool, you'll see a beautiful ASCII banner:
-
-```
-╔═══════════════════════════════════════════════════════════════╗
-║  ████████ ██████   █████  ███    ██ ███████  ██████ ██████   ║
-║     ██    ██   ██ ██   ██ ████   ██ ██      ██      ██   ██  ║
-║     ██    ██████  ███████ ██ ██  ██ ███████ ██      ██████   ║
-║     ██    ██   ██ ██   ██ ██  ██ ██      ██ ██      ██   ██  ║
-║     ██    ██   ██ ██   ██ ██   ████ ███████  ██████ ██   ██  ║
-╚═══════════════════════════════════════════════════════════════╝
-                  Audio Transcription Tools v0.1.0
-```
 
 ```bash
 # If installed as UV tool (recommended):
@@ -204,6 +192,59 @@ transcript file --model large
 # Combine options
 transcript file --language pt --model medium --format all --multilingual
 ```
+
+### Debug Mode (Developer Feature)
+
+For developers and troubleshooting timing estimation issues, a debug mode is available:
+
+```bash
+# Enable debug statistics during transcription
+transcript file --input audio.mp3 --debug
+
+# Debug mode with other options
+transcript file --input /path/to/folder --model tiny --debug
+```
+
+The debug mode displays detailed statistics every 5 segments:
+
+```
+🔧 Debug Statistics - aula_containers.wav
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Metric                         ┃                Value ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━┩
+│ Total Audio Duration           │             8432.50s │
+│ Current Position               │             1250.30s │
+│ Remaining Duration             │             7182.20s │
+│ Progress                       │                14.8% │
+│ Mean Processing Rate           │               13.50x │
+│ Estimated Time Remaining       │        532.0s (8.9m) │
+│                                │                      │
+│ ────────────────────────────── │ ──────────────────── │
+│                                │                      │
+│ Last 10 Segments               │                      │
+│   Total Segment Duration       │              115.00s │
+│   Total Process Time           │                8.50s │
+│   Average Rate                 │               13.53x │
+│                                │                      │
+│   Segment 1                    │       11.20s @ 14.0x │
+│   Segment 2                    │        9.80s @ 14.0x │
+│   Segment 3                    │       12.50s @ 13.9x │
+│   Segment 4                    │       10.30s @ 13.7x │
+│   Segment 5                    │       13.10s @ 13.1x │
+│   Segment 6                    │        8.90s @ 13.7x │
+│   Segment 7                    │       11.70s @ 13.8x │
+│   Segment 8                    │       14.20s @ 12.9x │
+│   Segment 9                    │       10.50s @ 13.1x │
+│   Segment 10                   │       12.80s @ 13.5x │
+└────────────────────────────────┴──────────────────────┘
+```
+
+This helps identify:
+
+- When processing rate drops or becomes undefined
+- Individual segments that take unusually long
+- Inconsistent processing rates
+- Progress tracking synchronization issues
 
 ### Features
 
@@ -362,6 +403,7 @@ Options:
   --output, -o PATH  Output folder (default: same as input)
   --format, -f {txt,srt,vtt,all}  Output format (default: txt)
   --multilingual  Enable per-segment language detection
+  --debug  Enable debug mode with detailed statistics (for developers)
 ```
 
 ## ⚙️ Configuration

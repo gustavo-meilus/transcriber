@@ -6,18 +6,16 @@ This document describes the visual improvements and animations added to the Tran
 
 The CLI has been completely redesigned with the following improvements:
 
-1. **Beautiful ASCII Art Banner** - Eye-catching header for the application
-2. **Animated Progress Bars** - Smooth animations with real-time updates
-3. **Color-Coded Output** - Different colors for different types of information
-4. **Live Status Updates** - Real-time feedback during processing
-5. **Styled Tables** - Clean, formatted tables for statistics and summaries
-6. **Responsive UI** - Dynamic updates that make the CLI feel more interactive
+1. **Animated Progress Bars** - Smooth animations with real-time updates
+2. **Color-Coded Output** - Different colors for different types of information
+3. **Live Status Updates** - Real-time feedback during processing
+4. **Styled Tables** - Clean, formatted tables for statistics and summaries
+5. **Responsive UI** - Dynamic updates that make the CLI feel more interactive
 
 ## 🚀 Key Features
 
 ### 1. Enhanced Main Interface
 
-- **ASCII Art Banner**: A stylized "TRANSCRIPT" logo appears when launching the CLI
 - **Colored Examples**: Help text uses color coding to make examples more readable
 - **Clean Layout**: Better spacing and organization of information
 

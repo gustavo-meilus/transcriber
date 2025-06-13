@@ -6,7 +6,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, TextIO
+from typing import Dict, List, Optional, TextIO, Tuple
 
 import numpy as np
 import sounddevice as sd
@@ -22,6 +22,23 @@ from rich.text import Text
 from scipy import signal as scipy_signal
 
 console = Console()
+
+# Constants
+SAMPLE_RATE = 16000
+BUFFER_DURATION = 5  # seconds of audio to buffer before transcribing
+BUFFER_SIZE = int(SAMPLE_RATE * BUFFER_DURATION)
+SILENCE_THRESHOLD = 0.001
+TARGET_MONITOR = (
+    "alsa_output.usb-Generic_TAE2146_20210726905926-00.analog-stereo.monitor"
+)
+
+LANGUAGE_MAP = {
+    "en": "en",
+    "pt": "pt",
+    "auto": None,  # None means auto-detect
+}
+
+LANGUAGE_DISPLAY = {"en": "English", "pt": "Portuguese", "auto": "Auto-detect"}
 
 
 class StreamingLiveWriter:
@@ -239,22 +256,38 @@ class TranscriptionUI:
 
 
 # Get the TAE2146 monitor device
-def get_tae2146_monitor_device():
+def get_tae2146_monitor_device() -> Tuple[str, str]:
     """Get the TAE2146 monitor device specifically."""
-    target_monitor = (
-        "alsa_output.usb-Generic_TAE2146_20210726905926-00.analog-stereo.monitor"
-    )
-
-    # First, check if we can use the exact name directly
-    try:
-        # Try to use the exact device name
-        sd.query_devices(target_monitor)
-        console.print("[green]✓[/green] Found TAE2146 monitor device directly")
-        return target_monitor, target_monitor
-    except Exception:
-        pass
+    # First, try to use the exact name directly
+    device_index, device_name = try_exact_device_match()
+    if device_index is not None:
+        return device_index, device_name
 
     # If not found by exact name, search through devices
+    device_index, device_name = search_device_by_name()
+    if device_index is not None:
+        return device_index, device_name
+
+    # If still not found, use PulseAudio
+    console.print(
+        "[yellow]⚠[/yellow] TAE2146 monitor not found in sounddevice, "
+        "attempting to use PulseAudio directly..."
+    )
+    return "pulse", "pulse (will use TAE2146 monitor via PulseAudio)"
+
+
+def try_exact_device_match() -> Tuple[Optional[str], Optional[str]]:
+    """Try to match device by exact name."""
+    try:
+        sd.query_devices(TARGET_MONITOR)
+        console.print("[green]✓[/green] Found TAE2146 monitor device directly")
+        return TARGET_MONITOR, TARGET_MONITOR
+    except Exception:
+        return None, None
+
+
+def search_device_by_name() -> Tuple[Optional[int], Optional[str]]:
+    """Search for TAE2146 device in available devices."""
     try:
         devices = sd.query_devices()
         for i, device in enumerate(devices):
@@ -273,270 +306,126 @@ def get_tae2146_monitor_device():
     except Exception as e:
         console.print(f"[yellow]⚠[/yellow] Error searching for TAE2146: {e}")
 
-    # If still not found, try using pactl to set up proper routing
-    console.print(
-        "[yellow]⚠[/yellow] TAE2146 monitor not found in sounddevice, attempting to use PulseAudio directly..."
-    )
-
-    # Use the pulse device with specific source selection
-    return "pulse", "pulse (will use TAE2146 monitor via PulseAudio)"
+    return None, None
 
 
-def run_live_transcription(args):
-    """Run live transcription with the given arguments."""
-    # Language mapping
-    LANGUAGE_MAP = {
-        "en": "en",
-        "pt": "pt",
-        "auto": None,  # None means auto-detect
-    }
+def setup_pulseaudio_source():
+    """Try to set PulseAudio default source to TAE2146 monitor."""
+    try:
+        subprocess.run(["pactl", "set-default-source", TARGET_MONITOR], check=True)
+        console.print(
+            "[green]✓[/green] Set PulseAudio default source to TAE2146 monitor"
+        )
+    except Exception as e:
+        console.print(f"[yellow]Note:[/yellow] Could not set default source: {e}")
 
-    selected_language = LANGUAGE_MAP[args.language]
-    language_display = {"en": "English", "pt": "Portuguese", "auto": "Auto-detect"}[
-        args.language
-    ]
 
-    # Initialize file writer if output is specified
-    file_writer = None
-    if args.output:
-        output_path = Path(args.output)
-        try:
-            file_writer = StreamingLiveWriter(
-                output_path, include_timestamps=not args.no_timestamps
+def get_device_configuration(device_index) -> Tuple[int, int, float]:
+    """Get device configuration for audio capture."""
+    try:
+        device_info = sd.query_devices(device_index)
+        channels = min(2, device_info["max_input_channels"])  # Use stereo if available
+        device_sample_rate = int(device_info["default_samplerate"])
+        resample_ratio = device_sample_rate / SAMPLE_RATE
+
+        if device_sample_rate != SAMPLE_RATE:
+            console.print(
+                f"[cyan]Device sample rate:[/cyan] {device_sample_rate}Hz → "
+                f"will resample to {SAMPLE_RATE}Hz"
             )
-            console.print(f"[green]✓[/green] Saving transcriptions to: {output_path}")
-        except Exception as e:
-            console.print(f"[red]Failed to create output file: {e}[/red]")
-            return
 
-    # Initialize UI
-    ui = TranscriptionUI()
+        return channels, device_sample_rate, resample_ratio
+    except Exception:
+        # Default values for common system audio
+        return 2, 48000, 48000 / SAMPLE_RATE
 
-    # Show initial loading status
+
+def initialize_file_writer(
+    output_path: Optional[str], no_timestamps: bool
+) -> Optional[StreamingLiveWriter]:
+    """Initialize file writer if output is specified."""
+    if not output_path:
+        return None
+
+    output_file = Path(output_path)
+    try:
+        file_writer = StreamingLiveWriter(
+            output_file, include_timestamps=not no_timestamps
+        )
+        console.print(f"[green]✓[/green] Saving transcriptions to: {output_file}")
+        return file_writer
+    except Exception as e:
+        console.print(f"[red]Failed to create output file: {e}[/red]")
+        raise
+
+
+def load_whisper_model(model_size: str) -> WhisperModel:
+    """Load the Whisper model with progress indicator."""
     with console.status(
         "[bold cyan]Loading Whisper model...[/bold cyan]", spinner="dots12"
     ):
-        model = WhisperModel(args.model, device="cpu", compute_type="int8")
+        model = WhisperModel(model_size, device="cpu", compute_type="int8")
         console.print("[green]✓[/green] Model loaded successfully!")
+    return model
 
-    console.print(f"[cyan]Language mode:[/cyan] {language_display}")
+
+def display_session_summary(
+    start_time: float,
+    transcription_count: int,
+    total_segments: int,
+    languages_detected: Dict[str, int],
+    total_transcription_time: float,
+    args,
+    file_writer: Optional[StreamingLiveWriter],
+) -> List[str]:
+    """Display and return session summary."""
+    total_time = time.time() - start_time
+
+    summary_content = []
+    summary_content.append(
+        f"[cyan]Total duration:[/cyan] {total_time:.1f}s ({total_time / 60:.1f} min)"
+    )
+    summary_content.append(f"[cyan]Total transcriptions:[/cyan] {transcription_count}")
+    summary_content.append(f"[cyan]Total segments:[/cyan] {total_segments}")
+
+    if transcription_count > 0:
+        avg_time = total_transcription_time / transcription_count
+        summary_content.append(f"[cyan]Avg transcription time:[/cyan] {avg_time:.2f}s")
+
+    if languages_detected:
+        summary_content.append("\n[bold cyan]Languages detected:[/bold cyan]")
+        total_lang_segments = sum(languages_detected.values())
+        for lang, count in sorted(
+            languages_detected.items(), key=lambda x: x[1], reverse=True
+        ):
+            percentage = (count / total_lang_segments) * 100
+            summary_content.append(f"  • {lang}: {count} segments ({percentage:.1f}%)")
+
+    summary_content.append(f"\n[cyan]Model:[/cyan] {args.model}")
+    summary_content.append(
+        f"[cyan]Language mode:[/cyan] {LANGUAGE_DISPLAY[args.language]}"
+    )
     if args.multilingual:
-        console.print("[cyan]Multilingual mode:[/cyan] [green]ENABLED[/green]")
+        summary_content.append("[cyan]Multilingual:[/cyan] Enabled")
+    if file_writer:
+        summary_content.append(f"[cyan]Output file:[/cyan] {file_writer.output_file}")
 
-    # Audio parameters
-    SAMPLE_RATE = 16000
-    BUFFER_DURATION = 5  # seconds of audio to buffer before transcribing
-    BUFFER_SIZE = int(SAMPLE_RATE * BUFFER_DURATION)
+    console.print("\n")
+    console.print(
+        Panel(
+            "\n".join(summary_content),
+            title="[bold green]📊 Session Summary[/bold green]",
+            border_style="green",
+            padding=(1, 2),
+        )
+    )
+    console.print("\n")
 
-    # Get TAE2146 monitor device
-    device_index, device_name = get_tae2146_monitor_device()
-    console.print(f"[cyan]Using audio device:[/cyan] {device_name}")
+    return summary_content
 
-    # If using pulse, try to set the default source to TAE2146 monitor
-    if device_index == "pulse":
-        try:
-            # Set PulseAudio to record from TAE2146 monitor
-            subprocess.run(
-                [
-                    "pactl",
-                    "set-default-source",
-                    "alsa_output.usb-Generic_TAE2146_20210726905926-00.analog-stereo.monitor",
-                ],
-                check=True,
-            )
-            console.print(
-                "[green]✓[/green] Set PulseAudio default source to TAE2146 monitor"
-            )
-        except Exception as e:
-            console.print(f"[yellow]Note:[/yellow] Could not set default source: {e}")
 
-    # Audio buffer
-    audio_buffer = []
-    buffer_lock = threading.Lock()
-    transcribing = False
-    resample_ratio = None
-    running = True
-
-    # Statistics tracking
-    start_time = time.time()
-    total_segments = 0
-    total_transcription_time = 0
-    languages_detected = {}
-    transcription_count = 0
-
-    # Setup signal handler for clean shutdown
-    def signal_handler(signum, frame):
-        nonlocal running
-        running = False
-        console.print("\n[yellow]Signal received! Stopping transcription...[/yellow]")
-        if file_writer:
-            try:
-                file_writer.close()
-                console.print(
-                    f"[green]✓[/green] Saved transcription to: {file_writer.output_file}"
-                )
-            except Exception as e:
-                console.print(f"[yellow]Warning: Error closing file: {e}[/yellow]")
-        sys.exit(0)
-
-    # Register signal handler
-    original_sigint = signal.signal(signal.SIGINT, signal_handler)
-
-    def audio_callback(indata, frames, time_info, status):
-        """Callback function to capture audio data."""
-        nonlocal resample_ratio
-
-        if status:
-            console.print(f"[yellow]Audio callback status:[/yellow] {status}")
-
-        # Convert to mono if needed
-        if indata.shape[1] > 1:
-            audio_data = np.mean(indata, axis=1)
-        else:
-            audio_data = indata.flatten()
-
-        # Resample to 16kHz if needed
-        if resample_ratio and resample_ratio != 1.0:
-            audio_data = scipy_signal.resample(
-                audio_data, int(len(audio_data) / resample_ratio)
-            )
-
-        with buffer_lock:
-            audio_buffer.extend(audio_data)
-
-    def transcribe_audio():
-        """Thread to transcribe audio periodically."""
-        nonlocal \
-            transcribing, \
-            total_segments, \
-            total_transcription_time, \
-            transcription_count, \
-            running, \
-            file_writer
-
-        while running:
-            time.sleep(BUFFER_DURATION)
-
-            with buffer_lock:
-                if len(audio_buffer) < BUFFER_SIZE:
-                    continue
-
-                # Get audio data and clear buffer
-                audio_data = np.array(audio_buffer[:BUFFER_SIZE], dtype=np.float32)
-                audio_buffer[:BUFFER_SIZE] = []
-
-            # Skip if audio is too quiet (no sound playing)
-            if np.max(np.abs(audio_data)) < 0.001:
-                ui.update_status("🔇 Waiting for audio...", "dim")
-                continue
-
-            transcribing = True
-            ui.update_status("🎯 Transcribing...", "bright_yellow")
-
-            trans_start = time.time()
-
-            try:
-                # Transcribe the audio
-                segments, info = model.transcribe(
-                    audio_data,
-                    language=selected_language,  # None for auto-detect
-                    beam_size=5,
-                    vad_filter=True,  # Voice activity detection
-                    vad_parameters=dict(min_silence_duration_ms=500),
-                    multilingual=args.multilingual,
-                )
-
-                # Process segments
-                segments_list = list(segments)
-                segment_count = len(segments_list)
-
-                # Update statistics
-                trans_time = time.time() - trans_start
-                total_transcription_time += trans_time
-                total_segments += segment_count
-                transcription_count += 1
-
-                # Update UI stats
-                elapsed = time.time() - start_time
-                ui.update_stats(
-                    duration=elapsed,
-                    transcriptions=transcription_count,
-                    segments=total_segments,
-                )
-
-                if args.multilingual:
-                    # Multilingual mode - show each segment with its language
-                    for segment in segments_list:
-                        if hasattr(segment, "language"):
-                            lang = segment.language
-                            languages_detected[lang] = (
-                                languages_detected.get(lang, 0) + 1
-                            )
-                            ui.update_stats(language=lang)
-                            ui.update_transcription(segment.text.strip(), lang)
-                            # Write to file if enabled
-                            if file_writer:
-                                file_writer.write_transcription(
-                                    segment.text.strip(), lang
-                                )
-                        else:
-                            ui.update_transcription(segment.text.strip())
-                            # Write to file if enabled
-                            if file_writer:
-                                file_writer.write_transcription(segment.text.strip())
-                else:
-                    # Regular mode
-                    text = " ".join([segment.text.strip() for segment in segments_list])
-
-                    # Get detected language if auto-detecting
-                    lang_info = None
-                    if selected_language is None and hasattr(info, "language"):
-                        lang = info.language
-                        languages_detected[lang] = languages_detected.get(lang, 0) + 1
-                        ui.update_stats(language=lang)
-                        lang_info = lang
-
-                    if text.strip():
-                        ui.update_transcription(text, lang_info)
-                        # Write to file if enabled
-                        if file_writer:
-                            file_writer.write_transcription(text, lang_info)
-
-                ui.update_status("✅ Ready", "green")
-
-            except Exception as e:
-                ui.update_status(f"❌ Error: {str(e)}", "red")
-
-            transcribing = False
-
-    # Start the transcription thread
-    console.print("\n[cyan]Starting transcription thread...[/cyan]")
-    transcription_thread = threading.Thread(target=transcribe_audio, daemon=True)
-    transcription_thread.start()
-
-    # Get device info for proper configuration
-    try:
-        device_info = sd.query_devices(device_index)
-        channels = min(
-            2, device_info["max_input_channels"]
-        )  # Use stereo if available, else mono
-
-        # Some monitor devices report high sample rates, but we'll resample to 16kHz
-        device_sample_rate = int(device_info["default_samplerate"])
-        resample_ratio = device_sample_rate / SAMPLE_RATE
-        if device_sample_rate != SAMPLE_RATE:
-            console.print(
-                f"[cyan]Device sample rate:[/cyan] {device_sample_rate}Hz → will resample to {SAMPLE_RATE}Hz"
-            )
-    except Exception:
-        channels = 2  # Default to stereo
-        device_sample_rate = 48000  # Common sample rate for system audio
-        resample_ratio = device_sample_rate / SAMPLE_RATE
-
-    # Clear console and start UI
-    console.clear()
-
-    # Start capturing audio from the system
+def show_ready_panel(language_display: str, file_writer: Optional[StreamingLiveWriter]):
+    """Display the ready panel before starting transcription."""
     panel_content = "[bold green]Listening to TAE2146 system audio...[/bold green]\n"
     panel_content += f"[cyan]Language:[/cyan] {language_display}\n"
     if file_writer:
@@ -554,9 +443,308 @@ def run_live_transcription(args):
         )
     )
 
-    time.sleep(2)  # Brief pause to show the message
+
+def process_audio_buffer(
+    audio_buffer: List[float], buffer_lock: threading.Lock, buffer_size: int
+) -> Optional[np.ndarray]:
+    """Process audio buffer and return audio data if ready."""
+    with buffer_lock:
+        if len(audio_buffer) < buffer_size:
+            return None
+
+        # Get audio data and clear buffer
+        audio_data = np.array(audio_buffer[:buffer_size], dtype=np.float32)
+        audio_buffer[:buffer_size] = []
+
+    # Skip if audio is too quiet
+    if np.max(np.abs(audio_data)) < SILENCE_THRESHOLD:
+        return None
+
+    return audio_data
+
+
+def process_transcription_segments(
+    segments_list: List,
+    args,
+    ui: TranscriptionUI,
+    file_writer: Optional[StreamingLiveWriter],
+    languages_detected: Dict[str, int],
+):
+    """Process transcription segments based on mode."""
+    if args.multilingual:
+        # Multilingual mode - show each segment with its language
+        for segment in segments_list:
+            if hasattr(segment, "language"):
+                lang = segment.language
+                languages_detected[lang] = languages_detected.get(lang, 0) + 1
+                ui.update_stats(language=lang)
+                ui.update_transcription(segment.text.strip(), lang)
+                # Write to file if enabled
+                if file_writer:
+                    file_writer.write_transcription(segment.text.strip(), lang)
+            else:
+                ui.update_transcription(segment.text.strip())
+                # Write to file if enabled
+                if file_writer:
+                    file_writer.write_transcription(segment.text.strip())
+    else:
+        # Regular mode
+        text = " ".join([segment.text.strip() for segment in segments_list])
+
+        # Get detected language if auto-detecting
+        lang_info = None
+        if (
+            args.language == "auto"
+            and segments_list
+            and hasattr(segments_list[0], "language")
+        ):
+            lang = segments_list[0].language
+            languages_detected[lang] = languages_detected.get(lang, 0) + 1
+            ui.update_stats(language=lang)
+            lang_info = lang
+
+        if text.strip():
+            ui.update_transcription(text, lang_info)
+            # Write to file if enabled
+            if file_writer:
+                file_writer.write_transcription(text, lang_info)
+
+
+class AudioTranscriber:
+    """Handles the audio transcription in a separate thread."""
+
+    def __init__(
+        self,
+        model: WhisperModel,
+        ui: TranscriptionUI,
+        file_writer: Optional[StreamingLiveWriter],
+        selected_language: Optional[str],
+        args,
+    ):
+        self.model = model
+        self.ui = ui
+        self.file_writer = file_writer
+        self.selected_language = selected_language
+        self.args = args
+        self.audio_buffer = []
+        self.buffer_lock = threading.Lock()
+        self.running = True
+        self.transcribing = False
+
+        # Statistics
+        self.start_time = time.time()
+        self.total_segments = 0
+        self.total_transcription_time = 0
+        self.languages_detected = {}
+        self.transcription_count = 0
+
+    def add_audio(self, audio_data: np.ndarray):
+        """Add audio data to buffer."""
+        with self.buffer_lock:
+            self.audio_buffer.extend(audio_data)
+
+    def stop(self):
+        """Stop the transcription thread."""
+        self.running = False
+
+    def transcribe_audio(self):
+        """Main transcription loop."""
+        while self.running:
+            time.sleep(BUFFER_DURATION)
+
+            # Process audio buffer
+            audio_data = process_audio_buffer(
+                self.audio_buffer, self.buffer_lock, BUFFER_SIZE
+            )
+            if audio_data is None:
+                self.ui.update_status("🔇 Waiting for audio...", "dim")
+                continue
+
+            self.transcribing = True
+            self.ui.update_status("🎯 Transcribing...", "bright_yellow")
+
+            trans_start = time.time()
+
+            try:
+                # Transcribe the audio
+                segments, info = self.model.transcribe(
+                    audio_data,
+                    language=self.selected_language,
+                    beam_size=5,
+                    vad_filter=True,
+                    vad_parameters=dict(min_silence_duration_ms=500),
+                    multilingual=self.args.multilingual,
+                )
+
+                # Process segments
+                segments_list = list(segments)
+                segment_count = len(segments_list)
+
+                # Update statistics
+                trans_time = time.time() - trans_start
+                self.total_transcription_time += trans_time
+                self.total_segments += segment_count
+                self.transcription_count += 1
+
+                # Update UI stats
+                elapsed = time.time() - self.start_time
+                self.ui.update_stats(
+                    duration=elapsed,
+                    transcriptions=self.transcription_count,
+                    segments=self.total_segments,
+                )
+
+                # Process segments
+                process_transcription_segments(
+                    segments_list,
+                    self.args,
+                    self.ui,
+                    self.file_writer,
+                    self.languages_detected,
+                )
+
+                self.ui.update_status("✅ Ready", "green")
+
+            except Exception as e:
+                self.ui.update_status(f"❌ Error: {str(e)}", "red")
+
+            self.transcribing = False
+
+
+def run_live_transcription(args):
+    """Run live transcription with the given arguments."""
+    selected_language = LANGUAGE_MAP[args.language]
+    language_display = LANGUAGE_DISPLAY[args.language]
+
+    # Initialize file writer if output is specified
+    try:
+        file_writer = initialize_file_writer(args.output, args.no_timestamps)
+    except Exception:
+        return
+
+    # Initialize UI
+    ui = TranscriptionUI()
+
+    # Load model
+    model = load_whisper_model(args.model)
+
+    console.print(f"[cyan]Language mode:[/cyan] {language_display}")
+    if args.multilingual:
+        console.print("[cyan]Multilingual mode:[/cyan] [green]ENABLED[/green]")
+
+    # Get TAE2146 monitor device
+    device_index, device_name = get_tae2146_monitor_device()
+    console.print(f"[cyan]Using audio device:[/cyan] {device_name}")
+
+    # If using pulse, try to set the default source
+    if device_index == "pulse":
+        setup_pulseaudio_source()
+
+    # Get device configuration
+    channels, device_sample_rate, resample_ratio = get_device_configuration(
+        device_index
+    )
+
+    # Initialize transcriber
+    transcriber = AudioTranscriber(model, ui, file_writer, selected_language, args)
+
+    # Audio callback
+    def audio_callback(indata, frames, time_info, status):
+        """Callback function to capture audio data."""
+        if status:
+            console.print(f"[yellow]Audio callback status:[/yellow] {status}")
+
+        # Convert to mono if needed
+        if indata.shape[1] > 1:
+            audio_data = np.mean(indata, axis=1)
+        else:
+            audio_data = indata.flatten()
+
+        # Resample to 16kHz if needed
+        if resample_ratio and resample_ratio != 1.0:
+            audio_data = scipy_signal.resample(
+                audio_data, int(len(audio_data) / resample_ratio)
+            )
+
+        transcriber.add_audio(audio_data)
+
+    # Start transcription thread
+    console.print("\n[cyan]Starting transcription thread...[/cyan]")
+    transcription_thread = threading.Thread(
+        target=transcriber.transcribe_audio, daemon=True
+    )
+    transcription_thread.start()
+
+    # Setup signal handler
+    running = True
+
+    def signal_handler(signum, frame):
+        nonlocal running
+        running = False
+        transcriber.stop()
+        console.print(
+            "\n[bold yellow]🛑 Interrupt received! Gracefully shutting down...[/bold yellow]"
+        )
+
+        # Show spinner while saving
+        with console.status(
+            "[cyan]Saving your session...[/cyan]", spinner="dots12"
+        ) as status:
+            if file_writer:
+                try:
+                    # Display summary first
+                    summary_content = display_session_summary(
+                        transcriber.start_time,
+                        transcriber.transcription_count,
+                        transcriber.total_segments,
+                        transcriber.languages_detected,
+                        transcriber.total_transcription_time,
+                        args,
+                        file_writer,
+                    )
+
+                    # Write summary to file
+                    status.update("[cyan]Writing session summary to file...[/cyan]")
+                    file_writer.write_summary(summary_content)
+                    time.sleep(0.2)  # Small delay to make the progress visible
+
+                    # Close the file
+                    status.update("[cyan]Saving transcription file...[/cyan]")
+                    file_writer.close()
+                    time.sleep(0.1)  # Small delay to make the progress visible
+                    console.print(
+                        f"  [green]✓ Saved transcription to: {file_writer.output_file}[/green]"
+                    )
+                except Exception as e:
+                    console.print(
+                        f"  [yellow]⚠ Warning: Error closing file: {e}[/yellow]"
+                    )
+            else:
+                # Just display summary if no file writer
+                display_session_summary(
+                    transcriber.start_time,
+                    transcriber.transcription_count,
+                    transcriber.total_segments,
+                    transcriber.languages_detected,
+                    transcriber.total_transcription_time,
+                    args,
+                    None,
+                )
+                time.sleep(0.5)  # Give time to see the summary
+
+        # Final message
+        console.print("\n[bold green]✅ Graceful shutdown complete![/bold green]\n")
+        sys.exit(0)
+
+    original_sigint = signal.signal(signal.SIGINT, signal_handler)
+
+    # Clear console and show ready panel
+    console.clear()
+    show_ready_panel(language_display, file_writer)
+    time.sleep(2)
     console.clear()
 
+    # Start audio capture
     try:
         with sd.InputStream(
             device=device_index,
@@ -565,86 +753,43 @@ def run_live_transcription(args):
             callback=audio_callback,
             blocksize=1024,
         ):
+            # Run UI
             with Live(ui.get_layout(), refresh_per_second=4, console=console):
-                while True:
+                while running:
                     time.sleep(0.25)
-                    if not transcribing:
+                    if not transcriber.transcribing:
                         ui.update_status("👂 Listening for audio...", "green")
 
                     # Update elapsed time
-                    elapsed = time.time() - start_time
+                    elapsed = time.time() - transcriber.start_time
                     ui.update_stats(duration=elapsed)
 
     except KeyboardInterrupt:
         running = False
+        transcriber.stop()
         console.print("\n[yellow]Stopping transcription...[/yellow]")
 
-        # Display summary statistics
-        total_time = time.time() - start_time
-
-        # Create summary panel
-        summary_content = []
-        summary_content.append(
-            f"[cyan]Total duration:[/cyan] {total_time:.1f}s ({total_time / 60:.1f} min)"
+        # Display summary
+        summary_content = display_session_summary(
+            transcriber.start_time,
+            transcriber.transcription_count,
+            transcriber.total_segments,
+            transcriber.languages_detected,
+            transcriber.total_transcription_time,
+            args,
+            file_writer,
         )
-        summary_content.append(
-            f"[cyan]Total transcriptions:[/cyan] {transcription_count}"
-        )
-        summary_content.append(f"[cyan]Total segments:[/cyan] {total_segments}")
 
-        if transcription_count > 0:
-            avg_time = total_transcription_time / transcription_count
-            summary_content.append(
-                f"[cyan]Avg transcription time:[/cyan] {avg_time:.2f}s"
-            )
-
-        if languages_detected:
-            summary_content.append("\n[bold cyan]Languages detected:[/bold cyan]")
-            total_lang_segments = sum(languages_detected.values())
-            for lang, count in sorted(
-                languages_detected.items(), key=lambda x: x[1], reverse=True
-            ):
-                percentage = (count / total_lang_segments) * 100
-                summary_content.append(
-                    f"  • {lang}: {count} segments ({percentage:.1f}%)"
-                )
-
-        summary_content.append(f"\n[cyan]Model:[/cyan] {args.model}")
-        summary_content.append(f"[cyan]Language mode:[/cyan] {language_display}")
-        if args.multilingual:
-            summary_content.append("[cyan]Multilingual:[/cyan] Enabled")
-        if file_writer:
-            summary_content.append(
-                f"[cyan]Output file:[/cyan] {file_writer.output_file}"
-            )
-
-        console.print("\n")
-        console.print(
-            Panel(
-                "\n".join(summary_content),
-                title="[bold green]📊 Session Summary[/bold green]",
-                border_style="green",
-                padding=(1, 2),
-            )
-        )
-        console.print("\n")
-
-        # Write summary to file and close
+        # Write summary to file
         if file_writer:
             file_writer.write_summary(summary_content)
 
     except Exception as e:
         console.print(f"\n[red]Error:[/red] {e}")
-        console.print("\n[yellow]Troubleshooting tips:[/yellow]")
-        console.print("1. Make sure TAE2146 is set as your default audio output device")
-        console.print("2. Check that audio is playing through the TAE2146 device")
-        console.print(
-            "3. Try running: [cyan]pactl set-default-source alsa_output.usb-Generic_TAE2146_20210726905926-00.analog-stereo.monitor[/cyan]"
-        )
-        console.print("4. Ensure PulseAudio/PipeWire is running")
+        show_troubleshooting_tips()
 
     finally:
-        # Restore original signal handler
+        # Restore signal handler
         signal.signal(signal.SIGINT, original_sigint)
 
         # Ensure file is closed
@@ -656,6 +801,17 @@ def run_live_transcription(args):
                 )
             except Exception as e:
                 console.print(f"[yellow]Warning: Error closing file: {e}[/yellow]")
+
+
+def show_troubleshooting_tips():
+    """Display troubleshooting tips for audio issues."""
+    console.print("\n[yellow]Troubleshooting tips:[/yellow]")
+    console.print("1. Make sure TAE2146 is set as your default audio output device")
+    console.print("2. Check that audio is playing through the TAE2146 device")
+    console.print(
+        f"3. Try running: [cyan]pactl set-default-source {TARGET_MONITOR}[/cyan]"
+    )
+    console.print("4. Ensure PulseAudio/PipeWire is running")
 
 
 # For backward compatibility when running directly
