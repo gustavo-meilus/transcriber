@@ -10,6 +10,8 @@ dependencies = [
     "faster-whisper",
     "scipy",
     "tqdm",
+    "rich>=13.0.0",
+    "click>=8.0.0",
 ]
 
 [project.scripts]
@@ -17,3 +19,8 @@ transcript = "transcript_pkg.cli:main"
 
 [tool.setuptools]
 packages = ["transcript_pkg"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.11.13",
+]

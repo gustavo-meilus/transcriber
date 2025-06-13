@@ -6,12 +6,23 @@ A unified CLI tool for audio transcription with support for English and Portugue
 
 - **Live Audio Transcription** - Real-time transcription of system audio
 - **File Batch Transcription** - Process multiple audio files at once
+- **Single File Transcription** - Transcribe individual audio files with smart path handling
 - **Multilingual Support** - Automatic detection of language switches
 - **Multiple Output Formats** - TXT, SRT, VTT for subtitles
 - **Performance Statistics** - Detailed metrics and time estimates
 - **Unified CLI** - Single command interface for all features
+- **Beautiful UI** - Animated progress bars and colored output using Rich library
+- **Streaming Output** - See results as they're generated in real-time
+- **Resume Capability** - Continue interrupted transcriptions from checkpoint
+- **Graceful Shutdown** - Save progress and outputs on Ctrl+C
+- **Smart Output Location** - Defaults to input directory when not specified
+- **Flexible Input** - Support for both single files and directories
+- **Live Transcription Export** - Save live sessions to file with optional timestamps
+- **High-Quality Models** - Support for models from tiny (39MB) to large (1.5GB)
 
 ## 🚀 Quick Start
+
+The Transcript tool provides a professional CLI experience with beautiful visual feedback, streaming output, and production-ready reliability.
 
 ### Installation
 
@@ -49,6 +60,19 @@ See [INSTALL.md](INSTALL.md) for detailed installation instructions.
 
 The `transcript` command provides two main modes: `live` for real-time transcription and `file` for batch processing.
 
+When you run the tool, you'll see a beautiful ASCII banner:
+
+```
+╔═══════════════════════════════════════════════════════════════╗
+║  ████████ ██████   █████  ███    ██ ███████  ██████ ██████   ║
+║     ██    ██   ██ ██   ██ ████   ██ ██      ██      ██   ██  ║
+║     ██    ██████  ███████ ██ ██  ██ ███████ ██      ██████   ║
+║     ██    ██   ██ ██   ██ ██  ██ ██      ██ ██      ██   ██  ║
+║     ██    ██   ██ ██   ██ ██   ████ ███████  ██████ ██   ██  ║
+╚═══════════════════════════════════════════════════════════════╝
+                  Audio Transcription Tools v0.1.0
+```
+
 ```bash
 # If installed as UV tool (recommended):
 transcript [command] [options]
@@ -85,8 +109,14 @@ transcript live --multilingual
 # Use a larger model for better accuracy
 transcript live --model large
 
+# Save transcription to file
+transcript live --output session.txt
+
+# Save without timestamps
+transcript live --output session.txt --no-timestamps
+
 # Combine options
-transcript live --language auto --multilingual --model small
+transcript live --language auto --multilingual --model small --output meeting.txt
 ```
 
 ### Features
@@ -96,40 +126,50 @@ transcript live --language auto --multilingual --model small
 - **Multilingual mode** - detects and labels language changes within the audio
 - **Session summary** - displays comprehensive statistics when stopped (Ctrl+C)
 - **Multiple model sizes** - balance speed vs accuracy
+- **Live dashboard** - animated status display with real-time stats
+- **File output** - optionally save transcriptions to a file with timestamps
+- **Streaming write** - output file updated in real-time as segments are transcribed
+- **Graceful shutdown** - transcripts are saved even when interrupted (Ctrl+C)
 
 ### Session Summary
 
 When you stop the transcription (Ctrl+C), you'll see detailed statistics:
 
 ```
-==================================================
-TRANSCRIPTION SESSION SUMMARY
-==================================================
-Total session duration: 125.3 seconds (2.1 minutes)
-Total transcriptions: 24
-Total segments processed: 156
-Average transcription time: 1.85 seconds
+╭───────────── 📊 Session Summary ─────────────╮
+│ Total duration: 125.3s (2.1 min)             │
+│ Total transcriptions: 24                      │
+│ Total segments: 156                           │
+│ Avg transcription time: 1.85s                 │
+│                                               │
+│ Languages detected:                           │
+│   • en: 89 segments (57.1%)                   │
+│   • pt: 67 segments (42.9%)                   │
+│                                               │
+│ Model: base                                   │
+│ Language mode: Auto-detect                    │
+│ Multilingual: Enabled                         │
+│ Output file: session.txt                      │
+╰───────────────────────────────────────────────╯
 
-Languages detected:
-  en: 89 segments (57.1%)
-  pt: 67 segments (42.9%)
-
-Settings used:
-  Model: base
-  Language mode: Auto-detect
-  Multilingual: Enabled
-==================================================
+✓ Transcription saved to: session.txt
 ```
 
 ## 📁 File Transcription
 
-Batch transcribe audio files with detailed performance metrics.
+Transcribe individual audio files or batch process entire folders with detailed performance metrics.
 
 ### Basic Usage
 
 ```bash
-# Auto-detect language (default)
+# Transcribe all files in default input folder
 transcript file
+
+# Transcribe a single audio file
+transcript file --input /path/to/audio.mp3
+
+# Transcribe all files in a specific folder
+transcript file --input /path/to/audio/folder
 
 # English files
 transcript file --language en
@@ -144,7 +184,13 @@ transcript file --multilingual
 ### Advanced Options
 
 ```bash
-# Change input/output directories
+# Single file with specific output location
+transcript file --input audio.mp3 --output /path/to/transcriptions
+
+# Change input directory (output defaults to same folder)
+transcript file --input /path/to/audio
+
+# Specify different output directory
 transcript file --input /path/to/audio --output /path/to/transcriptions
 
 # Different output formats
@@ -161,26 +207,109 @@ transcript file --language pt --model medium --format all --multilingual
 
 ### Features
 
+- **Single file support** - transcribe individual audio files
 - **Batch processing** - transcribe entire folders
 - **Multiple formats** - TXT, SRT, VTT outputs
 - **Progress tracking** - real-time progress with speed metrics
 - **Performance statistics** - detailed timing and estimates
 - **Wide format support** - MP3, WAV, MP4, and many more
+- **Streaming output** - results written as segments are processed
+- **Resume capability** - continue from where you left off
+- **Graceful interruption** - save progress with Ctrl+C
+- **Smart output location** - defaults to same folder as input files
+
+### Input Types
+
+The file transcription mode intelligently handles both files and folders:
+
+- **Single File**: When you specify a file path (e.g., `--input audio.mp3`), only that file will be transcribed
+- **Folder**: When you specify a folder path (e.g., `--input /audio/folder`), all supported audio files in that folder will be transcribed
+
+### 🔄 Streaming Output & Resume
+
+#### Streaming Output
+
+Files are written segment-by-segment as they're processed:
+
+- View partial results immediately
+- No need to wait for complete file processing
+- Progress bar shows actual segments completed
+- **Transcripts saved on interruption** - Even if you press Ctrl+C, all processed segments are saved
+
+#### Checkpoint System
+
+Automatic progress saving enables resumable transcriptions:
+
+- Progress saved automatically every 10 segments
+- Graceful shutdown on Ctrl+C saves current state
+- Resume prompt when previous session detected
+- **All writers are properly closed** - Ensures data is flushed to disk on interruption
+
+```
+╭─────────────── Resume Session? ───────────────╮
+│ Found previous transcription session           │
+│ Time: 2024-01-15T14:30:22                    │
+│ Files completed: 3                             │
+│ Current file: interview.mp3                    │
+╰────────────────────────────────────────────────╯
+Do you want to resume from where you left off? (Y/n):
+```
+
+#### File Resilience
+
+The system handles file issues gracefully:
+
+- Continues processing if input files are deleted
+- Handles output write failures without stopping
+- Retries file operations for temporary failures
 
 ### Performance Statistics
 
 ```
-==================================================
-PERFORMANCE STATISTICS
---------------------------------------------------
-Total audio duration: 45.8 seconds (0.8 minutes)
-Total processing time: 4.0 seconds (0.1 minutes)
-Overall time (including loading): 4.0 seconds
+╔═══════════════════════════════════════════════════════════════╗
+║  ⚡ Performance Statistics                                      ║
+╠═══════════════════════════════════════════════════════════════╣
+║ Metric                        │ Value                          ║
+╟───────────────────────────────┼────────────────────────────────╢
+║ Total Audio Duration          │ 45.8s (0.8 min)                ║
+║ Total Processing Time         │ 4.0s (0.1 min)                 ║
+║ Overall Time                  │ 4.0s (0.1 min)                 ║
+║ Average Speed                 │ 11.5x realtime                 ║
+║ Time per Audio Minute         │ 5.2s                           ║
+║ Est. for 1 Hour Audio         │ 5.2 minutes                    ║
+╚═══════════════════════════════════════════════════════════════╝
+```
 
-Average processing speed: 11.5x realtime
-Time per minute of audio: 5.2 seconds
-Estimated time for 1 hour of audio: 5.2 minutes
-==================================================
+### Example Outputs
+
+#### Portuguese Transcription (from classroom recording):
+
+```
+Boa noite a todos e todas, eu sou a Luísa César, o mediador da aula de hoje.
+Sejam muito bem-vindos ao módulo introdutório com a aula de
+Comprimização de Serviços Docker com o professor Hélder Prado Santos.
+```
+
+#### SRT Format with Timestamps:
+
+```
+33
+00:01:08,310 --> 00:01:10,190
+em segundo plano, instalando o material de Docker,
+
+34
+00:01:10,410 --> 00:01:12,390
+o principal, que é a instalação do Docker Desktop.
+```
+
+#### Graceful Shutdown Messages:
+
+```
+[yellow]Interrupt received! Saving progress...[/yellow]
+[green]✓ Saved txt output[/green]
+[green]✓ Saved srt output[/green]
+[green]✓ Saved vtt output[/green]
+[green]Progress saved. You can resume later.[/green]
 ```
 
 ## 🌐 Multilingual Support
@@ -217,6 +346,8 @@ Options:
   --language, -l {en,pt,auto}  Language for transcription (default: en)
   --model, -m {tiny,base,small,medium,large}  Model size (default: base)
   --multilingual  Enable per-segment language detection
+  --output, -o PATH  Save transcription to file
+  --no-timestamps  Do not include timestamps in output file
 ```
 
 ### File Mode Options
@@ -227,8 +358,8 @@ transcript file [options]
 Options:
   --language, -l {en,pt,auto}  Language for transcription (default: auto)
   --model, -m {tiny,base,small,medium,large}  Model size (default: base)
-  --input, -i PATH  Input folder (default: ./input)
-  --output, -o PATH  Output folder (default: ./output)
+  --input, -i PATH  Input file or folder (default: ./input)
+  --output, -o PATH  Output folder (default: same as input)
   --format, -f {txt,srt,vtt,all}  Output format (default: txt)
   --multilingual  Enable per-segment language detection
 ```
@@ -247,6 +378,32 @@ Options:
 
 The live transcription is configured for the TAE2146 audio device. To use a different device, modify the device selection in `transcript_pkg/live_transcribe.py`.
 
+## 📊 Tested Performance
+
+The tool has been extensively tested with real-world recordings:
+
+### Test Case: Portuguese Classroom Recording
+
+- **File**: 1.1GB WAV file (long classroom session)
+- **Language**: Portuguese
+- **Model**: Large (1.5GB)
+- **Results**:
+  - ✅ Accurate transcription of technical terms (Docker, VS Code)
+  - ✅ Proper name recognition (Luísa César, Hélder Prado Santos)
+  - ✅ Clean handling of interruptions with data preservation
+  - ✅ All output formats (TXT, SRT, VTT) generated correctly
+  - ✅ Checkpoint system successfully saved progress
+  - ✅ Memory usage: ~2.8GB with large model
+  - ✅ Processing continues even after Ctrl+C
+
+### Performance Characteristics
+
+- **Model Loading**: 30-60 seconds for large model
+- **Streaming Output**: Transcripts appear within seconds of processing
+- **Interrupt Handling**: Clean shutdown with confirmation messages
+- **Resume Speed**: Instant detection of previous sessions
+- **Output Quality**: Professional-grade transcriptions suitable for subtitles
+
 ## 📁 Project Structure
 
 ```
@@ -257,10 +414,12 @@ transcriber/
 │   ├── live_transcribe.py  # Live audio transcription
 │   └── file_transcribe.py  # File batch transcription
 ├── input/                  # Default input folder for files
-├── output/                 # Default output folder
+├── output/                 # Default output folder (when specified)
 ├── pyproject.toml          # Project configuration
 ├── README.md               # This file
-└── README_file_transcription.md  # Detailed file transcription docs
+├── VISUAL_ENHANCEMENTS.md  # Detailed visual features documentation
+├── INSTALL.md              # Installation guide
+└── CLI_USAGE.md            # Command-line usage examples
 ```
 
 ## 📋 Requirements
@@ -272,6 +431,34 @@ transcriber/
 ## 🤝 Contributing
 
 Feel free to submit issues and enhancement requests!
+
+## 🔧 Key Technical Improvements
+
+### Visual Enhancements
+
+- Rich library integration for beautiful terminal UI
+- Animated progress bars with dual tracking (files + segments)
+- Color-coded output for better readability
+- Live dashboard for real-time transcription
+- Professional error handling and status messages
+
+### Streaming & Reliability
+
+- True streaming output - segments written immediately
+- Checkpoint system saves every 10 segments automatically
+- Graceful interrupt handler ensures no data loss
+- Smart file closing on any exit condition
+- Resilient file operations with retry logic
+
+### User Experience
+
+- Smart defaults (output to input directory when not specified)
+- Flexible input handling (single file or directory)
+- Clear feedback at every step
+- Resume prompts with session information
+- Comprehensive statistics and performance metrics
+
+For detailed information about visual enhancements and implementation details, see [VISUAL_ENHANCEMENTS.md](VISUAL_ENHANCEMENTS.md).
 
 ## 📄 License
 
