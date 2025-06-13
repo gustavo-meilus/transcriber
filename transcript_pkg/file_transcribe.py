@@ -323,11 +323,22 @@ class DebugTracker:
 
     def __init__(self, debug_enabled: bool = False):
         self.enabled = debug_enabled
+        # Overall stats
+        self.total_files = 0
+        self.current_file_idx = 0
+        self.total_audio_duration_all = 0
+        self.total_audio_processed = 0
+        self.overall_elapsed_time = 0.0
+
+        # Current file stats
         self.file_name = ""
         self.audio_duration = 0
         self.audio_position = 0
         self.current_elapsed_time = 0.0
         self.previous_elapsed_time = 0.0  # From checkpoint
+
+        # Per-file tracking for multiple files
+        self.files_data = {}  # file_idx -> file data
 
     def add_segment(self, start: float, end: float, process_time: float):
         """Add a segment's data to the tracker."""
@@ -342,32 +353,112 @@ class DebugTracker:
         """Update the current session elapsed time."""
         self.current_elapsed_time = elapsed_time
 
+    def update_overall_stats(
+        self,
+        total_files: int,
+        file_idx: int,
+        total_audio_duration: float,
+        total_processed: float,
+    ):
+        """Update overall statistics."""
+        self.total_files = total_files
+        self.current_file_idx = file_idx
+        self.total_audio_duration_all = total_audio_duration
+        self.total_audio_processed = total_processed
+
+    def update_file_stats(
+        self,
+        file_idx: int,
+        file_name: str,
+        duration: float,
+        position: float,
+        elapsed: float,
+    ):
+        """Update statistics for a specific file."""
+        self.files_data[file_idx] = {
+            "name": file_name,
+            "duration": duration,
+            "position": position,
+            "elapsed": elapsed,
+        }
+
     def build_table(self) -> Table:
         """Build the debug statistics table."""
-        remaining_duration = self.audio_duration - self.audio_position
+        # Calculate overall remaining
+        overall_remaining = (
+            self.total_audio_duration_all
+            - self.total_audio_processed
+            - self.audio_position
+        )
         total_elapsed_time = self.previous_elapsed_time + self.current_elapsed_time
 
         # Create debug table
+        title = (
+            f"🔧 Debug Statistics - {self.file_name}"
+            if self.total_files == 1
+            else "🔧 Debug Statistics"
+        )
         debug_table = Table(
-            title=f"🔧 Debug Statistics - {self.file_name}",
+            title=title,
             show_header=True,
             header_style="bold magenta",
             border_style="magenta",
         )
 
-        debug_table.add_column("Metric", style="cyan", width=30)
+        debug_table.add_column("Metric", style="cyan", width=35)
         debug_table.add_column("Value", style="yellow", justify="right")
 
-        # Overall statistics
-        debug_table.add_row("Total Audio Duration", f"{self.audio_duration:.2f}s")
-        debug_table.add_row("Current Position", f"{self.audio_position:.2f}s")
-        debug_table.add_row("Remaining Duration", f"{remaining_duration:.2f}s")
+        # Show overall statistics (especially useful for multiple files)
+        if self.total_files > 1:
+            debug_table.add_row(
+                "Files Processing", f"{self.current_file_idx + 1}/{self.total_files}"
+            )
+            debug_table.add_row(
+                "Total Audio Duration (All Files)",
+                f"{self.total_audio_duration_all:.2f}s",
+            )
+            debug_table.add_row(
+                "Total Audio Processed",
+                f"{self.total_audio_processed + self.audio_position:.2f}s",
+            )
+            debug_table.add_row(
+                "Overall Remaining Duration", f"{overall_remaining:.2f}s"
+            )
+
+            if self.total_audio_duration_all > 0:
+                overall_progress = (
+                    (self.total_audio_processed + self.audio_position)
+                    / self.total_audio_duration_all
+                    * 100
+                )
+                debug_table.add_row("Overall Progress", f"{overall_progress:.1f}%")
+
+            # Overall ETA
+            if self.audio_position > 0 and self.current_elapsed_time > 0:
+                rate = self.audio_position / self.current_elapsed_time
+                if rate > 0:
+                    overall_eta = overall_remaining / rate
+                    debug_table.add_row(
+                        "Overall Time Remaining",
+                        f"{overall_eta:.1f}s ({overall_eta / 60:.1f}m)",
+                    )
+
+            # Add separator for current file stats
+            debug_table.add_row("─" * 35, "─" * 20, style="dim")
+            debug_table.add_row("Current File", self.file_name, style="bold")
+
+        # Current file statistics
+        remaining_duration = self.audio_duration - self.audio_position
+
+        debug_table.add_row("File Audio Duration", f"{self.audio_duration:.2f}s")
+        debug_table.add_row("File Current Position", f"{self.audio_position:.2f}s")
+        debug_table.add_row("File Remaining Duration", f"{remaining_duration:.2f}s")
 
         if self.audio_duration > 0:
             progress_pct = self.audio_position / self.audio_duration * 100
-            debug_table.add_row("Progress", f"{progress_pct:.1f}%")
+            debug_table.add_row("File Progress", f"{progress_pct:.1f}%")
         else:
-            debug_table.add_row("Progress", "0.0%")
+            debug_table.add_row("File Progress", "0.0%")
 
         # Format elapsed times as HH:MM:SS
         current_elapsed_formatted = format_duration_hhmmss(self.current_elapsed_time)
@@ -376,20 +467,20 @@ class DebugTracker:
         debug_table.add_row("Current Elapsed Time", current_elapsed_formatted)
         debug_table.add_row("Total Elapsed Time", total_elapsed_formatted)
 
-        # Calculate ETA based on processing rate
+        # Calculate file-specific ETA
         if self.audio_position > 0 and self.current_elapsed_time > 0:
             # Calculate rate: audio processed per second
             rate = self.audio_position / self.current_elapsed_time
             if rate > 0:
                 eta_seconds = remaining_duration / rate
                 debug_table.add_row(
-                    "Estimated Time Remaining",
+                    "File Estimated Time Remaining",
                     f"{eta_seconds:.1f}s ({eta_seconds / 60:.1f}m)",
                 )
             else:
-                debug_table.add_row("Estimated Time Remaining", "0.0s (0.0m)")
+                debug_table.add_row("File Estimated Time Remaining", "0.0s (0.0m)")
         else:
-            debug_table.add_row("Estimated Time Remaining", "0.0s (0.0m)")
+            debug_table.add_row("File Estimated Time Remaining", "0.0s (0.0m)")
 
         return debug_table
 
@@ -441,6 +532,10 @@ class ProgressWithDebug:
         audio_duration: float,
         audio_position: float,
         elapsed_time: float,
+        total_files: int = 1,
+        file_idx: int = 0,
+        total_audio_duration_all: float = 0,
+        total_audio_processed: float = 0,
     ):
         """Update debug statistics and refresh display."""
         if self.debug_enabled and self.debug_tracker:
@@ -448,6 +543,11 @@ class ProgressWithDebug:
             self.debug_tracker.audio_duration = audio_duration
             self.debug_tracker.audio_position = audio_position
             self.debug_tracker.update_current_elapsed_time(elapsed_time)
+
+            # Update overall stats for multiple files
+            self.debug_tracker.update_overall_stats(
+                total_files, file_idx, total_audio_duration_all, total_audio_processed
+            )
 
             if self.live:
                 self.live.update(self.get_renderable())
@@ -467,35 +567,87 @@ class ProgressWithDebug:
             self.progress.__exit__(exc_type, exc_val, exc_tb)
 
 
+class GlobalInterruptHandler:
+    """Global interrupt handler for the entire application."""
+
+    _instance = None
+
+    def __init__(self):
+        self.interrupted = False
+        self.original_sigint = None
+        self.cleanup_handlers = []
+
+    @classmethod
+    def instance(cls):
+        """Get singleton instance."""
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def install(self):
+        """Install the global interrupt handler."""
+        self.original_sigint = signal.signal(signal.SIGINT, self._handle_interrupt)
+        return self
+
+    def uninstall(self):
+        """Restore original signal handler."""
+        if self.original_sigint is not None:
+            signal.signal(signal.SIGINT, self.original_sigint)
+            self.original_sigint = None
+
+    def add_cleanup_handler(self, handler):
+        """Add a cleanup handler to be called on interrupt."""
+        self.cleanup_handlers.append(handler)
+
+    def remove_cleanup_handler(self, handler):
+        """Remove a cleanup handler."""
+        if handler in self.cleanup_handlers:
+            self.cleanup_handlers.remove(handler)
+
+    def _handle_interrupt(self, signum, frame):
+        """Handle interrupt signal immediately."""
+        if self.interrupted:
+            # Force exit on second Ctrl+C
+            console.print("\n[bold red]Force quit![/bold red]")
+            sys.exit(1)
+
+        self.interrupted = True
+        console.print(
+            "\n[bold yellow]🛑 Interrupt received! Gracefully shutting down...[/bold yellow]"
+        )
+
+        # Execute cleanup handlers
+        if self.cleanup_handlers:
+            with console.status(
+                "[cyan]Saving your progress...[/cyan]", spinner="dots12"
+            ) as status:
+                for handler in self.cleanup_handlers:
+                    try:
+                        handler(status)
+                    except Exception as e:
+                        console.print(
+                            f"  [yellow]⚠ Warning: Error during cleanup: {e}[/yellow]"
+                        )
+
+        # Final message
+        console.print("\n[bold green]✅ Graceful shutdown complete![/bold green]")
+        console.print("[green]Your progress has been saved where applicable.[/green]\n")
+        sys.exit(0)
+
+
 class GracefulInterruptHandler:
-    """Handle graceful shutdown on interrupt."""
+    """Handle graceful shutdown on interrupt for segment processing."""
 
     def __init__(
         self, checkpoint: TranscriptionCheckpoint, writers: Optional[Dict] = None
     ):
         self.checkpoint = checkpoint
         self.writers = writers or {}
-        self.interrupted = False
-        self.original_sigint = None
+        self.cleanup_handler = None
 
     def __enter__(self):
-        self.original_sigint = signal.signal(signal.SIGINT, self._handle_interrupt)
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        signal.signal(signal.SIGINT, self.original_sigint)
-
-    def _handle_interrupt(self, signum, frame):
-        """Handle interrupt signal."""
-        self.interrupted = True
-        console.print(
-            "\n[bold yellow]🛑 Interrupt received! Gracefully shutting down...[/bold yellow]"
-        )
-
-        # Show spinner while saving
-        with console.status(
-            "[cyan]Saving your progress...[/cyan]", spinner="dots12"
-        ) as status:
+        # Create cleanup handler for this context
+        def cleanup(status):
             # Close all writers to ensure data is flushed
             if self.writers:
                 for fmt, writer in self.writers.items():
@@ -515,12 +667,15 @@ class GracefulInterruptHandler:
             time.sleep(0.2)  # Small delay to make the progress visible
             console.print("  [green]✓ Checkpoint saved[/green]")
 
-        # Final message
-        console.print("\n[bold green]✅ Graceful shutdown complete![/bold green]")
-        console.print(
-            "[green]Your progress has been saved. You can resume transcription later.[/green]\n"
-        )
-        sys.exit(0)
+        self.cleanup_handler = cleanup
+        GlobalInterruptHandler.instance().add_cleanup_handler(cleanup)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.cleanup_handler:
+            GlobalInterruptHandler.instance().remove_cleanup_handler(
+                self.cleanup_handler
+            )
 
 
 def check_file_exists_with_retry(file_path: Path, max_retries: int = 3) -> bool:
@@ -575,14 +730,71 @@ def get_audio_files(input_path: Path) -> Tuple[List[Path], str]:
 
 
 def show_error_panel(message: str, title: str = "Error"):
-    """Display an error message in a panel."""
+    """Display error panel with rich formatting."""
     console.print(
         Panel(
-            f"[yellow]{message}[/yellow]",
+            message,
             title=f"[bold red]{title}[/bold red]",
             border_style="red",
+            padding=(1, 2),
         )
     )
+
+
+def detect_device_and_compute_type(force_cpu: bool = False) -> Tuple[str, str]:
+    """Detect if GPU is available and return appropriate device and compute type.
+
+    Args:
+        force_cpu: If True, force CPU usage even if GPU is available
+
+    Returns:
+        Tuple of (device, compute_type)
+    """
+    if force_cpu:
+        console.print("[yellow]ℹ[/yellow] Using CPU (forced by --cpu flag)")
+        return "cpu", "int8"
+
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            # Get GPU info
+            gpu_name = torch.cuda.get_device_name(0)
+            gpu_memory = (
+                torch.cuda.get_device_properties(0).total_memory / 1024**3
+            )  # GB
+
+            console.print(
+                f"[green]✓[/green] GPU detected: {gpu_name} ({gpu_memory:.1f}GB)"
+            )
+
+            # Choose compute type based on GPU capability
+            gpu_capability = torch.cuda.get_device_capability(0)
+
+            # Use float16 for GPUs with compute capability >= 7.0 (Turing and newer)
+            # This includes RTX 20xx, RTX 30xx, RTX 40xx, A100, etc.
+            if gpu_capability[0] >= 7:
+                return "cuda", "float16"
+            else:
+                # Older GPUs use int8 for better compatibility
+                return "cuda", "int8"
+        else:
+            console.print(
+                "[yellow]ℹ[/yellow] No GPU detected, using CPU with int8 quantization"
+            )
+            return "cpu", "int8"
+
+    except ImportError:
+        # PyTorch not installed, fallback to CPU
+        console.print(
+            "[yellow]ℹ[/yellow] PyTorch not found, using CPU with int8 quantization"
+        )
+        return "cpu", "int8"
+    except Exception as e:
+        # Any other error, fallback to CPU
+        console.print(f"[yellow]⚠[/yellow] Error detecting GPU: {e}")
+        console.print("[yellow]ℹ[/yellow] Falling back to CPU with int8 quantization")
+        return "cpu", "int8"
 
 
 def create_output_directory(output_path: Optional[str]) -> Optional[Path]:
@@ -630,13 +842,19 @@ def display_configuration(
     console.print("\n")
 
 
-def load_whisper_model(model_size: str) -> WhisperModel:
+def load_whisper_model(model_size: str, force_cpu: bool = False) -> WhisperModel:
     """Load the Whisper model with progress indicator."""
+    # Detect device and compute type
+    device, compute_type = detect_device_and_compute_type(force_cpu)
+
     with console.status(
-        "[bold cyan]Loading Whisper model...[/bold cyan]", spinner="dots12"
+        f"[bold cyan]Loading Whisper {model_size} model on {device.upper()}...[/bold cyan]",
+        spinner="dots12",
     ):
-        model = WhisperModel(model_size, device="cpu", compute_type="int8")
-        console.print("✅ [green]Model loaded successfully![/green]")
+        model = WhisperModel(model_size, device=device, compute_type=compute_type)
+        console.print(
+            f"[green]✓[/green] Model loaded successfully on {device.upper()}!"
+        )
     return model
 
 
@@ -753,6 +971,7 @@ def process_single_file(
     total_audio_processed: float,
     progress_with_debug: Optional[ProgressWithDebug] = None,
     remaining_duration_column: Optional[RemainingAudioDurationColumn] = None,
+    estimated_total_duration: float = 0,
 ) -> Tuple[bool, float, float, int]:
     """
     Process a single audio file.
@@ -816,6 +1035,7 @@ def process_single_file(
                 audio_file.name,
                 progress_with_debug if args.debug else None,
                 remaining_duration_column,
+                estimated_total_duration,
             )
 
         # Close writers
@@ -854,6 +1074,7 @@ def process_segments(
     file_name: str,
     progress_with_debug: Optional[ProgressWithDebug] = None,
     remaining_duration_column: Optional[RemainingAudioDurationColumn] = None,
+    estimated_total_duration: float = 0,
 ) -> Tuple[bool, int]:
     """Process all segments. Returns (success, segment_count)."""
     segment_count = 0
@@ -881,7 +1102,16 @@ def process_segments(
 
     # Initialize debug display with initial values
     if progress_with_debug and progress_with_debug.debug_enabled:
-        progress_with_debug.update_debug(file_name, info.duration, audio_position, 0.0)
+        progress_with_debug.update_debug(
+            file_name,
+            info.duration,
+            audio_position,
+            0.0,
+            total_files,
+            file_idx,
+            estimated_total_duration,
+            total_audio_processed,
+        )
 
     # Initialize progress for this file
     if file_idx == 0:
@@ -947,24 +1177,20 @@ def process_segments(
                 segment_task, file_remaining
             )
 
-    estimated_segments = max(1, int(info.duration / SEGMENT_ESTIMATE_SECONDS))
+    max(1, int(info.duration / SEGMENT_ESTIMATE_SECONDS))
 
-    # For single file, make segment task track audio position like main task
-    if total_files == 1:
-        progress.update(
-            segment_task,
-            total=info.duration,
-            completed=audio_position,  # Start from checkpoint position
-        )
-    else:
-        progress.update(segment_task, total=estimated_segments)
+    # For both single and multiple files, make segment task track audio position
+    progress.update(
+        segment_task,
+        total=info.duration,
+        completed=audio_position,  # Start from checkpoint position
+    )
 
     # Update segment task description
     progress.update(
         segment_task,
         description=f"[yellow]Processing: {file_name}",
         visible=True,
-        completed=0,  # Reset completion for new file
     )
 
     try:
@@ -1042,10 +1268,8 @@ def process_segments(
                     progress.update(segment_task, completed=audio_position)
                     progress.update(main_task, completed=audio_position)
                 else:
-                    # Multiple files: segment task tracks segments, main task tracks total audio
-                    if segment_count > estimated_segments:
-                        progress.update(segment_task, total=segment_count + 5)
-                    progress.update(segment_task, completed=segment_count)
+                    # Multiple files: segment task tracks current file audio position, main task tracks total
+                    progress.update(segment_task, completed=audio_position)
                     progress.update(
                         main_task, completed=total_audio_processed + audio_position
                     )
@@ -1070,7 +1294,14 @@ def process_segments(
                 if progress_with_debug and progress_with_debug.debug_enabled:
                     current_elapsed_time = time.perf_counter() - session_start_time
                     progress_with_debug.update_debug(
-                        file_name, info.duration, audio_position, current_elapsed_time
+                        file_name,
+                        info.duration,
+                        audio_position,
+                        current_elapsed_time,
+                        total_files,
+                        file_idx,
+                        estimated_total_duration,
+                        total_audio_processed,
                     )
 
             except StopIteration:
@@ -1092,11 +1323,21 @@ def process_segments(
             # Single file: both bars should be at 100%
             progress.update(segment_task, completed=info.duration)
             progress.update(main_task, completed=info.duration)
+        else:
+            # Multiple files: segment task shows 100% for current file
+            progress.update(segment_task, completed=info.duration)
 
         # Final debug display update
         if progress_with_debug and progress_with_debug.debug_enabled:
             progress_with_debug.update_debug(
-                file_name, info.duration, audio_position, final_elapsed_time
+                file_name,
+                info.duration,
+                audio_position,
+                final_elapsed_time,
+                total_files,
+                file_idx,
+                estimated_total_duration,
+                total_audio_processed,
             )
 
         return True, segment_count
@@ -1224,174 +1465,196 @@ def estimate_audio_duration(file_path: Path) -> float:
 
 def run_file_transcription(args):
     """Run file transcription with streaming output and resume capability."""
-    selected_language = LANGUAGE_MAP[args.language]
-    language_display = LANGUAGE_DISPLAY[args.language]
+    # Install global interrupt handler immediately
+    global_handler = GlobalInterruptHandler.instance()
+    global_handler.install()
 
-    # Handle output directory
-    use_input_dir_as_output = args.output is None
-
-    # Parse input path
-    input_path = Path(args.input)
-
-    # Get audio files
     try:
-        audio_files, input_type_display = get_audio_files(input_path)
-    except ValueError as e:
-        show_error_panel(
-            f"{str(e)}\nSupported formats: {', '.join(sorted(AUDIO_EXTENSIONS))}",
-            "Invalid Audio File",
-        )
-        return
-    except FileNotFoundError as e:
-        show_error_panel(
-            f"{str(e)}\nPlease place your audio files in this directory and run the script again.",
-            "No Input Directory",
-        )
-        return
+        selected_language = LANGUAGE_MAP[args.language]
+        language_display = LANGUAGE_DISPLAY[args.language]
 
-    # Create output directory if specified
-    try:
-        output_path = create_output_directory(args.output)
-    except Exception as e:
-        show_error_panel(f"Failed to create output directory: {e}", "Output Error")
-        return
+        # Handle output directory
+        use_input_dir_as_output = args.output is None
 
-    # Load the Whisper model with progress
-    model = load_whisper_model(args.model)
+        # Parse input path
+        input_path = Path(args.input)
 
-    # Display configuration
-    display_configuration(
-        input_type_display,
-        input_path,
-        len(audio_files),
-        language_display,
-        args.format,
-        args.model,
-        "same folder as input files" if use_input_dir_as_output else str(args.output),
-        args.multilingual,
-        args.debug,
-    )
+        # Get audio files
+        try:
+            audio_files, input_type_display = get_audio_files(input_path)
+        except ValueError as e:
+            show_error_panel(
+                f"{str(e)}\nSupported formats: {', '.join(sorted(AUDIO_EXTENSIONS))}",
+                "Invalid Audio File",
+            )
+            return
+        except FileNotFoundError as e:
+            show_error_panel(
+                f"{str(e)}\nPlease place your audio files in this directory and run the script again.",
+                "No Input Directory",
+            )
+            return
 
-    # Process each audio file
-    console.print("\n[bold cyan]Starting transcription...[/bold cyan]\n")
+        # Create output directory if specified
+        try:
+            output_path = create_output_directory(args.output)
+        except Exception as e:
+            show_error_panel(f"Failed to create output directory: {e}", "Output Error")
+            return
 
-    # Statistics tracking
-    total_duration = 0
-    total_process_time = 0
-    successful_files = 0
-    failed_files = 0
-    overall_start_time = time.perf_counter()
+        # Load the Whisper model with progress
+        model = load_whisper_model(args.model, getattr(args, "cpu", False))
 
-    # Check all checkpoints BEFORE starting the progress display
-    checkpoints_info = []
-    estimated_total_duration = 0
-    for audio_file in audio_files:
-        checkpoint = TranscriptionCheckpoint(audio_file)
-        resume_from_checkpoint, checkpoint_start_position = should_resume_checkpoint(
-            checkpoint, audio_file
-        )
-        checkpoints_info.append(
-            {
-                "checkpoint": checkpoint,
-                "resume": resume_from_checkpoint,
-                "start_position": checkpoint_start_position,
-            }
-        )
-        # Estimate duration for progress tracking
-        estimated_total_duration += estimate_audio_duration(audio_file)
-
-    # Create progress with debug display
-    progress_with_debug = ProgressWithDebug(args.debug)
-
-    with progress_with_debug as display:
-        # Get the progress object and remaining duration column
-        if args.debug:
-            progress = progress_with_debug.start()
-            remaining_duration_column = progress_with_debug.remaining_duration_column
-        else:
-            progress = display
-            remaining_duration_column = progress_with_debug.remaining_duration_column
-
-        # Main task for overall progress
-        main_task = progress.add_task(
-            "[cyan]Preparing transcription...",
-            total=estimated_total_duration,  # Use estimated total
-            completed=0,
-            visible=True,  # Show from the start
+        # Display configuration
+        display_configuration(
+            input_type_display,
+            input_path,
+            len(audio_files),
+            language_display,
+            args.format,
+            args.model,
+            "same folder as input files"
+            if use_input_dir_as_output
+            else str(args.output),
+            args.multilingual,
+            args.debug,
         )
 
-        # Secondary task for current file segments
-        segment_task = progress.add_task("[yellow]Current file segments", visible=False)
+        # Process each audio file
+        console.print("\n[bold cyan]Starting transcription...[/bold cyan]\n")
 
-        # Track overall progress
-        total_audio_processed = 0
+        # Statistics tracking
+        total_duration = 0
+        total_process_time = 0
+        successful_files = 0
+        failed_files = 0
+        overall_start_time = time.perf_counter()
 
-        for file_idx, (audio_file, checkpoint_info) in enumerate(
-            zip(audio_files, checkpoints_info)
-        ):
-            # Get checkpoint info
-            checkpoint = checkpoint_info["checkpoint"]
-            resume_from_checkpoint = checkpoint_info["resume"]
-            checkpoint_start_position = checkpoint_info["start_position"]
+        # Check all checkpoints BEFORE starting the progress display
+        checkpoints_info = []
+        estimated_total_duration = 0
+        for audio_file in audio_files:
+            checkpoint = TranscriptionCheckpoint(audio_file)
+            resume_from_checkpoint, checkpoint_start_position = (
+                should_resume_checkpoint(checkpoint, audio_file)
+            )
+            checkpoints_info.append(
+                {
+                    "checkpoint": checkpoint,
+                    "resume": resume_from_checkpoint,
+                    "start_position": checkpoint_start_position,
+                }
+            )
+            # Estimate duration for progress tracking
+            estimated_total_duration += estimate_audio_duration(audio_file)
 
-            # Process the file
-            success, audio_duration, process_time, segment_count = process_single_file(
-                audio_file,
-                model,
-                checkpoint,
-                resume_from_checkpoint,
-                checkpoint_start_position,
-                args,
-                use_input_dir_as_output,
-                output_path,
-                selected_language,
-                file_idx,
-                len(audio_files),
-                progress,
-                main_task,
-                segment_task,
-                total_audio_processed,
-                progress_with_debug if args.debug else None,
-                remaining_duration_column,
+        # Create progress with debug display
+        progress_with_debug = ProgressWithDebug(args.debug)
+
+        with progress_with_debug as display:
+            # Get the progress object and remaining duration column
+            if args.debug:
+                progress = progress_with_debug.start()
+                remaining_duration_column = (
+                    progress_with_debug.remaining_duration_column
+                )
+            else:
+                progress = display
+                remaining_duration_column = (
+                    progress_with_debug.remaining_duration_column
+                )
+
+            # Main task for overall progress
+            main_task = progress.add_task(
+                "[cyan]Preparing transcription...",
+                total=estimated_total_duration,  # Use estimated total
+                completed=0,
+                visible=True,  # Show from the start
             )
 
-            if success:
-                # Update statistics
-                total_duration += audio_duration
-                total_process_time += process_time
-                successful_files += 1
+            # Secondary task for current file segments
+            segment_task = progress.add_task(
+                "[yellow]Current file segments", visible=False
+            )
 
-                # Update total audio processed
-                total_audio_processed += audio_duration
+            # Track overall progress
+            total_audio_processed = 0
 
-                # Update main progress to completion for this file
-                progress.update(main_task, completed=total_audio_processed)
-                progress.update(segment_task, visible=False)
+            for file_idx, (audio_file, checkpoint_info) in enumerate(
+                zip(audio_files, checkpoints_info)
+            ):
+                # Get checkpoint info
+                checkpoint = checkpoint_info["checkpoint"]
+                resume_from_checkpoint = checkpoint_info["resume"]
+                checkpoint_start_position = checkpoint_info["start_position"]
 
-            else:
-                failed_files += 1
+                # Process the file
+                success, audio_duration, process_time, segment_count = (
+                    process_single_file(
+                        audio_file,
+                        model,
+                        checkpoint,
+                        resume_from_checkpoint,
+                        checkpoint_start_position,
+                        args,
+                        use_input_dir_as_output,
+                        output_path,
+                        selected_language,
+                        file_idx,
+                        len(audio_files),
+                        progress,
+                        main_task,
+                        segment_task,
+                        total_audio_processed,
+                        progress_with_debug if args.debug else None,
+                        remaining_duration_column,
+                        estimated_total_duration,
+                    )
+                )
 
-                # Skip this file's duration in progress if available
-                if audio_duration > 0:
+                if success:
+                    # Update statistics
+                    total_duration += audio_duration
+                    total_process_time += process_time
+                    successful_files += 1
+
+                    # Update total audio processed
                     total_audio_processed += audio_duration
+
+                    # Update main progress to completion for this file
                     progress.update(main_task, completed=total_audio_processed)
+                    progress.update(segment_task, visible=False)
 
-    # Calculate overall statistics
-    overall_time = time.perf_counter() - overall_start_time
+                else:
+                    failed_files += 1
 
-    # Display final results
-    display_final_results(
-        successful_files,
-        failed_files,
-        total_duration,
-        total_process_time,
-        overall_time,
-        args.format,
-        language_display,
-        args.multilingual,
-        use_input_dir_as_output,
-        output_path,
-    )
+                    # Skip this file's duration in progress if available
+                    if audio_duration > 0:
+                        total_audio_processed += audio_duration
+                        progress.update(main_task, completed=total_audio_processed)
+
+        # Calculate overall statistics
+        overall_time = time.perf_counter() - overall_start_time
+
+        # Display final results
+        display_final_results(
+            successful_files,
+            failed_files,
+            total_duration,
+            total_process_time,
+            overall_time,
+            args.format,
+            language_display,
+            args.multilingual,
+            use_input_dir_as_output,
+            output_path,
+        )
+
+    except Exception as e:
+        console.print(f"[red]Error in run_file_transcription: {e}[/red]")
+    finally:
+        # Uninstall global handler
+        global_handler.uninstall()
 
 
 # For backward compatibility when running directly
@@ -1441,6 +1704,11 @@ if __name__ == "__main__":
         "--debug",
         action="store_true",
         help="Enable debug mode for detailed segment processing statistics",
+    )
+    parser.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Force CPU usage even if GPU is available",
     )
     args = parser.parse_args()
     run_file_transcription(args)

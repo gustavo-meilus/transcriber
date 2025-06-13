@@ -69,6 +69,7 @@ uv run ./transcript file --multilingual --model large
 - `--language {en,pt,auto}` - Language (default: en)
 - `--model {tiny,base,small,medium,large}` - Model size (default: base)
 - `--multilingual` - Enable per-segment language detection
+- `--cpu` - Force CPU usage even if GPU is available
 
 ### File Mode Options
 
@@ -78,6 +79,7 @@ uv run ./transcript file --multilingual --model large
 - `--output PATH` - Output folder (default: ./output)
 - `--format {txt,srt,vtt,all}` - Output format (default: txt)
 - `--multilingual` - Enable per-segment language detection
+- `--cpu` - Force CPU usage even if GPU is available
 
 ## Examples
 
@@ -120,5 +122,7 @@ uv run ./transcript file -i ~/Videos -o ~/Transcriptions --model large
 
 4. **Performance**:
    - Processing speed varies by model size
-   - Expect ~10-15x realtime with base model
-   - Large models are ~2-3x realtime
+   - Expect ~10-15x realtime with base model on CPU
+   - Large models are ~2-3x realtime on CPU
+   - GPU can be 3-5x faster than CPU
+   - Use `--cpu` to force CPU if GPU is busy

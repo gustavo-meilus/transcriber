@@ -85,6 +85,12 @@ def add_live_subparser(subparsers) -> argparse.ArgumentParser:
         help="Do not include timestamps in transcription output",
     )
 
+    live_parser.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Force CPU usage even if GPU is available",
+    )
+
     return live_parser
 
 
@@ -149,6 +155,12 @@ def add_file_subparser(subparsers) -> argparse.ArgumentParser:
         "--debug",
         action="store_true",
         help="Enable debug mode with detailed statistics (for developers)",
+    )
+
+    file_parser.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Force CPU usage even if GPU is available",
     )
 
     return file_parser

@@ -2,6 +2,8 @@
 
 A unified CLI tool for audio transcription with support for English and Portuguese, including automatic language detection and multilingual capabilities.
 
+**🚀 New: [Google Colab Notebook](transcript_colab.ipynb)** - Run transcriptions directly in your browser with free GPU!
+
 ## 🎯 Features
 
 - **Live Audio Transcription** - Real-time transcription of system audio
@@ -19,13 +21,29 @@ A unified CLI tool for audio transcription with support for English and Portugue
 - **Flexible Input** - Support for both single files and directories
 - **Live Transcription Export** - Save live sessions to file with optional timestamps
 - **High-Quality Models** - Support for models from tiny (39MB) to large (1.5GB)
+- **GPU Acceleration** - Automatic GPU detection and usage for faster processing
 - **Debug Mode**: Detailed statistics for developers to diagnose timing issues
 
 ## 🚀 Quick Start
 
 The Transcript tool provides a professional CLI experience with beautiful visual feedback, streaming output, and production-ready reliability.
 
-### Installation
+### Option 1: Google Colab (No Installation!)
+
+Run transcriptions directly in your browser using our [Google Colab notebook](transcript_colab.ipynb):
+
+- No installation required
+- Free GPU acceleration
+- Direct Google Drive integration
+- [📓 Open in Colab](https://colab.research.google.com/github/gustavo-meilus/transcriber/blob/main/transcript_colab.ipynb)
+
+**Getting Started:**
+
+- [🚀 Quick Start Guide](COLAB_QUICK_START.md) - 5 simple steps
+- [📘 Complete Setup Guide](COLAB_SETUP_GUIDE.md) - Detailed instructions
+- [📖 Colab Features Overview](COLAB_README.md) - What's included
+
+### Option 2: Local Installation
 
 #### For Users (Recommended)
 
@@ -415,6 +433,36 @@ Options:
 - `small` - Better accuracy (~244MB)
 - `medium` - High accuracy (~769MB)
 - `large` - Best accuracy (~1550MB)
+
+### GPU Support
+
+The tool automatically detects and uses GPU acceleration when available:
+
+- **Automatic Detection** - Detects NVIDIA GPUs with CUDA support
+- **Smart Compute Type** - Uses float16 for modern GPUs (RTX 20xx+), int8 for older
+- **Fallback to CPU** - Gracefully falls back if GPU unavailable or PyTorch missing
+- **Force CPU Option** - Use `--cpu` flag to force CPU usage even with GPU available
+
+#### GPU Requirements
+
+- NVIDIA GPU with CUDA support
+- PyTorch installed with CUDA support: `pip install torch torchvision torchaudio`
+
+#### Performance Comparison
+
+- **CPU (int8)**: ~10-15x realtime on modern processors
+- **GPU (float16)**: ~30-50x realtime on RTX 3060 or better
+- **GPU (int8)**: ~20-30x realtime on older GPUs
+
+Example:
+
+```bash
+# Auto-detect GPU (default)
+transcript file --model large
+
+# Force CPU usage
+transcript file --model large --cpu
+```
 
 ### Audio Device
 

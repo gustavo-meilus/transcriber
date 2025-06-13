@@ -1,7 +1,7 @@
+"""Live transcription module for capturing and transcribing system audio."""
+
 import argparse
-import signal
 import subprocess
-import sys
 import threading
 import time
 from datetime import datetime
@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, TextIO, Tuple
 
 import numpy as np
+import scipy.signal as scipy_signal
 import sounddevice as sd
 from faster_whisper import WhisperModel
 from rich import box
@@ -19,7 +20,8 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from scipy import signal as scipy_signal
+
+from .file_transcribe import GlobalInterruptHandler, detect_device_and_compute_type
 
 console = Console()
 
@@ -359,13 +361,19 @@ def initialize_file_writer(
         raise
 
 
-def load_whisper_model(model_size: str) -> WhisperModel:
+def load_whisper_model(model_size: str, force_cpu: bool = False) -> WhisperModel:
     """Load the Whisper model with progress indicator."""
+    # Detect device and compute type
+    device, compute_type = detect_device_and_compute_type(force_cpu)
+
     with console.status(
-        "[bold cyan]Loading Whisper model...[/bold cyan]", spinner="dots12"
+        f"[bold cyan]Loading Whisper {model_size} model on {device.upper()}...[/bold cyan]",
+        spinner="dots12",
     ):
-        model = WhisperModel(model_size, device="cpu", compute_type="int8")
-        console.print("[green]✓[/green] Model loaded successfully!")
+        model = WhisperModel(model_size, device=device, compute_type=compute_type)
+        console.print(
+            f"[green]✓[/green] Model loaded successfully on {device.upper()}!"
+        )
     return model
 
 
@@ -613,83 +621,50 @@ class AudioTranscriber:
 
 def run_live_transcription(args):
     """Run live transcription with the given arguments."""
-    selected_language = LANGUAGE_MAP[args.language]
-    language_display = LANGUAGE_DISPLAY[args.language]
+    # Install global interrupt handler immediately
+    global_handler = GlobalInterruptHandler.instance()
+    global_handler.install()
 
-    # Initialize file writer if output is specified
     try:
-        file_writer = initialize_file_writer(args.output, args.no_timestamps)
-    except Exception:
-        return
+        selected_language = LANGUAGE_MAP[args.language]
+        language_display = LANGUAGE_DISPLAY[args.language]
 
-    # Initialize UI
-    ui = TranscriptionUI()
+        # Initialize file writer if output is specified
+        try:
+            file_writer = initialize_file_writer(args.output, args.no_timestamps)
+        except Exception:
+            return
 
-    # Load model
-    model = load_whisper_model(args.model)
+        # Initialize UI
+        ui = TranscriptionUI()
 
-    console.print(f"[cyan]Language mode:[/cyan] {language_display}")
-    if args.multilingual:
-        console.print("[cyan]Multilingual mode:[/cyan] [green]ENABLED[/green]")
+        # Load model
+        model = load_whisper_model(args.model, getattr(args, "cpu", False))
 
-    # Get TAE2146 monitor device
-    device_index, device_name = get_tae2146_monitor_device()
-    console.print(f"[cyan]Using audio device:[/cyan] {device_name}")
+        console.print(f"[cyan]Language mode:[/cyan] {language_display}")
+        if args.multilingual:
+            console.print("[cyan]Multilingual mode:[/cyan] [green]ENABLED[/green]")
 
-    # If using pulse, try to set the default source
-    if device_index == "pulse":
-        setup_pulseaudio_source()
+        # Get TAE2146 monitor device
+        device_index, device_name = get_tae2146_monitor_device()
+        console.print(f"[cyan]Using audio device:[/cyan] {device_name}")
 
-    # Get device configuration
-    channels, device_sample_rate, resample_ratio = get_device_configuration(
-        device_index
-    )
+        # If using pulse, try to set the default source
+        if device_index == "pulse":
+            setup_pulseaudio_source()
 
-    # Initialize transcriber
-    transcriber = AudioTranscriber(model, ui, file_writer, selected_language, args)
-
-    # Audio callback
-    def audio_callback(indata, frames, time_info, status):
-        """Callback function to capture audio data."""
-        if status:
-            console.print(f"[yellow]Audio callback status:[/yellow] {status}")
-
-        # Convert to mono if needed
-        if indata.shape[1] > 1:
-            audio_data = np.mean(indata, axis=1)
-        else:
-            audio_data = indata.flatten()
-
-        # Resample to 16kHz if needed
-        if resample_ratio and resample_ratio != 1.0:
-            audio_data = scipy_signal.resample(
-                audio_data, int(len(audio_data) / resample_ratio)
-            )
-
-        transcriber.add_audio(audio_data)
-
-    # Start transcription thread
-    console.print("\n[cyan]Starting transcription thread...[/cyan]")
-    transcription_thread = threading.Thread(
-        target=transcriber.transcribe_audio, daemon=True
-    )
-    transcription_thread.start()
-
-    # Setup signal handler
-    running = True
-
-    def signal_handler(signum, frame):
-        nonlocal running
-        running = False
-        transcriber.stop()
-        console.print(
-            "\n[bold yellow]🛑 Interrupt received! Gracefully shutting down...[/bold yellow]"
+        # Get device configuration
+        channels, device_sample_rate, resample_ratio = get_device_configuration(
+            device_index
         )
 
-        # Show spinner while saving
-        with console.status(
-            "[cyan]Saving your session...[/cyan]", spinner="dots12"
-        ) as status:
+        # Initialize transcriber
+        transcriber = AudioTranscriber(model, ui, file_writer, selected_language, args)
+
+        # Setup cleanup handler for this session
+        def cleanup_handler(status):
+            transcriber.stop()
+
             if file_writer:
                 try:
                     # Display summary first
@@ -732,75 +707,79 @@ def run_live_transcription(args):
                 )
                 time.sleep(0.5)  # Give time to see the summary
 
-        # Final message
-        console.print("\n[bold green]✅ Graceful shutdown complete![/bold green]\n")
-        sys.exit(0)
+        # Add cleanup handler to global handler
+        global_handler.add_cleanup_handler(cleanup_handler)
 
-    original_sigint = signal.signal(signal.SIGINT, signal_handler)
+        # Audio callback
+        def audio_callback(indata, frames, time_info, status):
+            """Callback function to capture audio data."""
+            if status:
+                console.print(f"[yellow]Audio callback status:[/yellow] {status}")
 
-    # Clear console and show ready panel
-    console.clear()
-    show_ready_panel(language_display, file_writer)
-    time.sleep(2)
-    console.clear()
+            # Convert to mono if needed
+            if indata.shape[1] > 1:
+                audio_data = np.mean(indata, axis=1)
+            else:
+                audio_data = indata.flatten()
 
-    # Start audio capture
-    try:
-        with sd.InputStream(
-            device=device_index,
-            channels=channels,
-            samplerate=device_sample_rate,
-            callback=audio_callback,
-            blocksize=1024,
-        ):
-            # Run UI
-            with Live(ui.get_layout(), refresh_per_second=4, console=console):
-                while running:
-                    time.sleep(0.25)
-                    if not transcriber.transcribing:
-                        ui.update_status("👂 Listening for audio...", "green")
+            # Resample to 16kHz if needed
+            if resample_ratio and resample_ratio != 1.0:
+                audio_data = scipy_signal.resample(
+                    audio_data, int(len(audio_data) / resample_ratio)
+                )
 
-                    # Update elapsed time
-                    elapsed = time.time() - transcriber.start_time
-                    ui.update_stats(duration=elapsed)
+            transcriber.add_audio(audio_data)
 
-    except KeyboardInterrupt:
-        running = False
-        transcriber.stop()
-        console.print("\n[yellow]Stopping transcription...[/yellow]")
-
-        # Display summary
-        summary_content = display_session_summary(
-            transcriber.start_time,
-            transcriber.transcription_count,
-            transcriber.total_segments,
-            transcriber.languages_detected,
-            transcriber.total_transcription_time,
-            args,
-            file_writer,
+        # Start transcription thread
+        console.print("\n[cyan]Starting transcription thread...[/cyan]")
+        transcription_thread = threading.Thread(
+            target=transcriber.transcribe_audio, daemon=True
         )
+        transcription_thread.start()
 
-        # Write summary to file
-        if file_writer:
-            file_writer.write_summary(summary_content)
+        # Clear console and show ready panel
+        console.clear()
+        show_ready_panel(language_display, file_writer)
+        time.sleep(2)
+        console.clear()
 
-    except Exception as e:
-        console.print(f"\n[red]Error:[/red] {e}")
-        show_troubleshooting_tips()
+        # Start audio capture
+        try:
+            with sd.InputStream(
+                device=device_index,
+                channels=channels,
+                samplerate=device_sample_rate,
+                callback=audio_callback,
+                blocksize=1024,
+            ):
+                # Run UI
+                with Live(ui.get_layout(), refresh_per_second=4, console=console):
+                    running = True
+                    while running:
+                        time.sleep(0.25)
+                        if not transcriber.transcribing:
+                            ui.update_status("👂 Listening for audio...", "green")
+
+                        # Update elapsed time
+                        elapsed = time.time() - transcriber.start_time
+                        ui.update_stats(duration=elapsed)
+
+                        # Check if interrupted
+                        if global_handler.interrupted:
+                            running = False
+                            break
+
+        except KeyboardInterrupt:
+            # This should never happen now with GlobalInterruptHandler
+            pass
+
+        except Exception as e:
+            console.print(f"\n[red]Error:[/red] {e}")
+            show_troubleshooting_tips()
 
     finally:
-        # Restore signal handler
-        signal.signal(signal.SIGINT, original_sigint)
-
-        # Ensure file is closed
-        if file_writer:
-            try:
-                file_writer.close()
-                console.print(
-                    f"[green]✓[/green] Transcription saved to: {file_writer.output_file}"
-                )
-            except Exception as e:
-                console.print(f"[yellow]Warning: Error closing file: {e}[/yellow]")
+        # Uninstall global handler
+        global_handler.uninstall()
 
 
 def show_troubleshooting_tips():
@@ -847,6 +826,11 @@ if __name__ == "__main__":
         "--no-timestamps",
         action="store_true",
         help="Do not include timestamps in transcription",
+    )
+    parser.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Force CPU usage even if GPU is available",
     )
     args = parser.parse_args()
     run_live_transcription(args)
