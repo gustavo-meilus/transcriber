@@ -8,7 +8,7 @@ import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, TextIO, Tuple
+from typing import Optional, TextIO
 
 import numpy as np
 import scipy.signal as scipy_signal
@@ -80,7 +80,7 @@ class LiveSessionCheckpoint:
         duration: float,
         transcription_count: int,
         segment_count: int,
-        languages: Dict[str, int],
+        languages: dict[str, int],
         last_transcription: Optional[str] = None,
     ):
         """Update checkpoint data."""
@@ -524,7 +524,7 @@ def display_configuration(
     language_display: str,
     output_format: str,
     model_size: str,
-    output_files: Dict[str, StreamingLiveWriter],
+    output_files: dict[str, StreamingLiveWriter],
     multilingual: bool,
     debug: bool = False,
     no_timestamps: bool = False,
@@ -559,7 +559,7 @@ def display_configuration(
     console.print("\n")
 
 
-def get_available_input_devices() -> List[Tuple[int, str, int, int]]:
+def get_available_input_devices() -> list[tuple[int, str, int, int]]:
     """Get list of available input devices.
 
     Returns:
@@ -585,7 +585,7 @@ def get_available_input_devices() -> List[Tuple[int, str, int, int]]:
     return devices
 
 
-def display_device_selection_menu(devices: List[Tuple[int, str, int, int]]) -> int:
+def display_device_selection_menu(devices: list[tuple[int, str, int, int]]) -> int:
     """Display interactive device selection menu and get user choice.
 
     Args:
@@ -660,7 +660,7 @@ def display_device_selection_menu(devices: List[Tuple[int, str, int, int]]) -> i
 
 def get_audio_device(
     device_arg: Optional[int] = None, prefer_tae2146: bool = True
-) -> Tuple[int, str]:
+) -> tuple[int, str]:
     """Get audio device based on user preference or interactive selection.
 
     Args:
@@ -721,7 +721,7 @@ def get_audio_device(
 
 
 # Get the TAE2146 monitor device
-def get_tae2146_monitor_device() -> Tuple[str, str]:
+def get_tae2146_monitor_device() -> tuple[str, str]:
     """Get the TAE2146 monitor device specifically."""
     # First, try to use the exact name directly
     device_index, device_name = try_exact_device_match()
@@ -737,7 +737,7 @@ def get_tae2146_monitor_device() -> Tuple[str, str]:
     return "pulse", "pulse (TAE2146 not found)"
 
 
-def try_exact_device_match() -> Tuple[Optional[str], Optional[str]]:
+def try_exact_device_match() -> tuple[Optional[str], Optional[str]]:
     """Try to match device by exact name."""
     try:
         sd.query_devices(TARGET_MONITOR)
@@ -747,7 +747,7 @@ def try_exact_device_match() -> Tuple[Optional[str], Optional[str]]:
         return None, None
 
 
-def search_device_by_name() -> Tuple[Optional[int], Optional[str]]:
+def search_device_by_name() -> tuple[Optional[int], Optional[str]]:
     """Search for TAE2146 device in available devices."""
     try:
         devices = sd.query_devices()
@@ -781,7 +781,7 @@ def setup_pulseaudio_source():
         console.print(f"[yellow]Note:[/yellow] Could not set default source: {e}")
 
 
-def get_device_configuration(device_index) -> Tuple[int, int, float]:
+def get_device_configuration(device_index) -> tuple[int, int, float]:
     """Get device configuration for audio capture."""
     try:
         device_info = sd.query_devices(device_index)
@@ -801,18 +801,18 @@ def get_device_configuration(device_index) -> Tuple[int, int, float]:
         return 2, 48000, 48000 / SAMPLE_RATE
 
 
-def get_formats_to_process(format_arg: str) -> List[str]:
+def get_formats_to_process(format_arg: str) -> list[str]:
     """Get list of formats to process based on argument."""
     return ["txt", "srt", "vtt"] if format_arg == "all" else [format_arg]
 
 
 def initialize_file_writers(
     output_path: Optional[str],
-    formats: List[str],
+    formats: list[str],
     no_timestamps: bool,
     detected_language: Optional[str] = None,
     multilingual: bool = False,
-) -> Dict[str, StreamingLiveWriter]:
+) -> dict[str, StreamingLiveWriter]:
     """Initialize file writers for all requested formats."""
     if not output_path:
         return {}
@@ -868,11 +868,11 @@ def display_session_summary(
     start_time: float,
     transcription_count: int,
     total_segments: int,
-    languages_detected: Dict[str, int],
+    languages_detected: dict[str, int],
     total_transcription_time: float,
     args,
-    file_writers: Optional[Dict[str, StreamingLiveWriter]],
-) -> List[str]:
+    file_writers: Optional[dict[str, StreamingLiveWriter]],
+) -> list[str]:
     """Display and return session summary."""
     total_time = time.time() - start_time
 
@@ -929,7 +929,7 @@ def display_session_summary(
 
 
 def show_ready_panel(
-    language_display: str, file_writers: Dict[str, StreamingLiveWriter]
+    language_display: str, file_writers: dict[str, StreamingLiveWriter]
 ):
     """Display the ready panel before starting transcription."""
     panel_content = "[bold green]Listening to system audio...[/bold green]\n"
@@ -956,7 +956,7 @@ def show_ready_panel(
 
 
 def process_audio_buffer(
-    audio_buffer: List[float], buffer_lock: threading.Lock, buffer_size: int
+    audio_buffer: list[float], buffer_lock: threading.Lock, buffer_size: int
 ) -> Optional[np.ndarray]:
     """Process audio buffer and return audio data if ready."""
     with buffer_lock:
@@ -975,11 +975,11 @@ def process_audio_buffer(
 
 
 def process_transcription_segments(
-    segments_list: List,
+    segments_list: list,
     args,
     ui: TranscriptionUI,
-    file_writers: Dict[str, StreamingLiveWriter],
-    languages_detected: Dict[str, int],
+    file_writers: dict[str, StreamingLiveWriter],
+    languages_detected: dict[str, int],
     timestamp: float,
 ):
     """Process transcription segments based on mode."""
@@ -1029,7 +1029,7 @@ class AudioTranscriber:
         self,
         model: WhisperModel,
         ui: TranscriptionUI,
-        file_writers: Dict[str, StreamingLiveWriter],
+        file_writers: dict[str, StreamingLiveWriter],
         selected_language: Optional[str],
         args,
         checkpoint: Optional[LiveSessionCheckpoint] = None,

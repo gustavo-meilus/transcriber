@@ -9,7 +9,7 @@ import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Optional
 
 from faster_whisper import WhisperModel
 from rich.console import Console, Group
@@ -82,7 +82,7 @@ class TranscriptionCheckpoint:
         """Load checkpoint data if it exists."""
         if self.checkpoint_file.exists():
             try:
-                with open(self.checkpoint_file, "r") as f:
+                with open(self.checkpoint_file) as f:
                     self.data = json.load(f)
                 return True
             except Exception:
@@ -639,7 +639,7 @@ class GracefulInterruptHandler:
     """Handle graceful shutdown on interrupt for segment processing."""
 
     def __init__(
-        self, checkpoint: TranscriptionCheckpoint, writers: Optional[Dict] = None
+        self, checkpoint: TranscriptionCheckpoint, writers: Optional[dict] = None
     ):
         self.checkpoint = checkpoint
         self.writers = writers or {}
@@ -697,7 +697,7 @@ def is_audio_file(file_path: Path, audio_extensions: set) -> bool:
     return file_path.is_file() and file_path.suffix.lower() in audio_extensions
 
 
-def find_audio_files_in_directory(directory: Path) -> List[Path]:
+def find_audio_files_in_directory(directory: Path) -> list[Path]:
     """Find all audio files in a directory."""
     audio_files = []
     for file in directory.iterdir():
@@ -706,7 +706,7 @@ def find_audio_files_in_directory(directory: Path) -> List[Path]:
     return audio_files
 
 
-def get_audio_files(input_path: Path) -> Tuple[List[Path], str]:
+def get_audio_files(input_path: Path) -> tuple[list[Path], str]:
     """
     Get audio files from input path (file or directory).
     Returns tuple of (audio_files, input_type_display).
@@ -741,7 +741,7 @@ def show_error_panel(message: str, title: str = "Error"):
     )
 
 
-def detect_device_and_compute_type(force_cpu: bool = False) -> Tuple[str, str]:
+def detect_device_and_compute_type(force_cpu: bool = False) -> tuple[str, str]:
     """Detect if GPU is available and return appropriate device and compute type.
 
     Args:
@@ -860,7 +860,7 @@ def load_whisper_model(model_size: str, force_cpu: bool = False) -> WhisperModel
 
 def should_resume_checkpoint(
     checkpoint: TranscriptionCheckpoint, audio_file: Path
-) -> Tuple[bool, float]:
+) -> tuple[bool, float]:
     """Check if we should resume from checkpoint and get start position."""
     if not checkpoint.load():
         return False, 0
@@ -911,12 +911,12 @@ def should_resume_checkpoint(
 
 def create_output_writers(
     audio_file: Path,
-    formats: List[str],
+    formats: list[str],
     use_input_dir: bool,
     output_dir: Optional[Path],
     detected_language: Optional[str],
     multilingual: bool,
-) -> Dict[str, StreamingTranscriptionWriter]:
+) -> dict[str, StreamingTranscriptionWriter]:
     """Create writers for all requested output formats."""
     writers = {}
 
@@ -938,7 +938,7 @@ def create_output_writers(
     return writers
 
 
-def get_formats_to_process(format_arg: str) -> List[str]:
+def get_formats_to_process(format_arg: str) -> list[str]:
     """Get list of formats to process based on argument."""
     return ["txt", "srt", "vtt"] if format_arg == "all" else [format_arg]
 
@@ -972,7 +972,7 @@ def process_single_file(
     progress_with_debug: Optional[ProgressWithDebug] = None,
     remaining_duration_column: Optional[RemainingAudioDurationColumn] = None,
     estimated_total_duration: float = 0,
-) -> Tuple[bool, float, float, int]:
+) -> tuple[bool, float, float, int]:
     """
     Process a single audio file.
     Returns: (success, audio_duration, process_time, segment_count)
@@ -1061,7 +1061,7 @@ def process_single_file(
 def process_segments(
     segments_preview,
     info,
-    writers: Dict[str, StreamingTranscriptionWriter],
+    writers: dict[str, StreamingTranscriptionWriter],
     checkpoint: TranscriptionCheckpoint,
     resume_from_checkpoint: bool,
     checkpoint_start_position: float,
@@ -1075,7 +1075,7 @@ def process_segments(
     progress_with_debug: Optional[ProgressWithDebug] = None,
     remaining_duration_column: Optional[RemainingAudioDurationColumn] = None,
     estimated_total_duration: float = 0,
-) -> Tuple[bool, int]:
+) -> tuple[bool, int]:
     """Process all segments. Returns (success, segment_count)."""
     segment_count = 0
     audio_position = checkpoint_start_position if resume_from_checkpoint else 0

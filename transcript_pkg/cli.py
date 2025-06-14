@@ -8,7 +8,6 @@ transcription with support for English, Portuguese, and multilingual content.
 
 import argparse
 import sys
-from typing import List
 
 from rich.console import Console
 
@@ -241,7 +240,7 @@ def show_examples():
 
 
 def handle_help(
-    argv: List[str],
+    argv: list[str],
     parser: argparse.ArgumentParser,
     live_parser: argparse.ArgumentParser,
     file_parser: argparse.ArgumentParser,
