@@ -28,6 +28,7 @@ from rich.progress import (
 from rich.prompt import Confirm
 from rich.table import Table
 from rich.text import Text
+from tinytag import TinyTag
 
 console = Console()
 
@@ -58,6 +59,15 @@ AUDIO_EXTENSIONS = {
 }
 
 SEGMENT_ESTIMATE_SECONDS = 12  # Rough estimate: 1 segment per 12 seconds
+
+
+def get_actual_audio_duration(file_path: Path) -> float:
+    """Get actual audio duration using TinyTag."""
+    try:
+        tag = TinyTag.get(file_path)
+        return tag.duration or 0.0
+    except Exception:
+        return 0.0  # Return 0 if duration can't be read
 
 
 class TranscriptionCheckpoint:
@@ -256,48 +266,31 @@ def format_duration_hhmmss(seconds: float) -> str:
 
 
 class RemainingAudioDurationColumn(ProgressColumn):
-    """Custom column showing remaining audio duration that decreases second by second."""
+    """Custom column showing the calculated ETA with a live countdown."""
 
     def __init__(self):
         super().__init__()
-        self.remaining_duration = {}  # task_id -> remaining_duration
-        self.last_update_time = {}  # task_id -> last_update_time
+        self.task_etas = {}  # task_id -> (eta_in_seconds, last_update_time)
         self.lock = threading.Lock()
 
-    def set_remaining_duration(self, task_id: int, duration: float):
-        """Set the remaining audio duration for a task."""
+    def set_eta(self, task_id: int, eta: float):
+        """Set the ETA for a specific task."""
         with self.lock:
-            self.remaining_duration[task_id] = duration
-            self.last_update_time[task_id] = time.time()
-
-    def update_remaining_duration(self, task_id: int, actual_remaining: float):
-        """Update remaining duration with actual value."""
-        with self.lock:
-            self.remaining_duration[task_id] = actual_remaining
-            self.last_update_time[task_id] = time.time()
-
-    def _get_current_remaining(self, task_id: int) -> float:
-        """Get current remaining duration accounting for elapsed time."""
-        if task_id not in self.remaining_duration:
-            return 0.0
-
-        # Calculate how much time has passed since last update
-        elapsed_since_update = time.time() - self.last_update_time.get(
-            task_id, time.time()
-        )
-
-        # Decrease remaining by elapsed time
-        remaining = self.remaining_duration[task_id] - elapsed_since_update
-        return max(0.0, remaining)
+            self.task_etas[task_id] = (eta, time.time())
 
     def render(self, task: Task) -> Text:
-        """Render the remaining audio duration."""
+        """Render the ETA by calculating the remaining time since the last update."""
         with self.lock:
-            remaining = self._get_current_remaining(task.id)
-            if remaining > 0:
-                return Text(format_duration_hhmmss(remaining), style="bold")
-            else:
-                return Text("00:00:00", style="bold")
+            eta_info = self.task_etas.get(task.id)
+            if eta_info:
+                eta, last_update_time = eta_info
+                time_elapsed = time.time() - last_update_time
+                current_eta = eta - time_elapsed
+
+                if current_eta > 0:
+                    return Text(format_duration_hhmmss(current_eta), style="bold")
+
+        return Text("--:--:--", style="bold")
 
 
 def create_progress_bar():
@@ -329,6 +322,7 @@ class DebugTracker:
         self.total_audio_duration_all = 0
         self.total_audio_processed = 0
         self.overall_elapsed_time = 0.0
+        self.overall_start_time = 0.0
 
         # Current file stats
         self.file_name = ""
@@ -385,12 +379,14 @@ class DebugTracker:
     def build_table(self) -> Table:
         """Build the debug statistics table."""
         # Calculate overall remaining
-        overall_remaining = (
-            self.total_audio_duration_all
-            - self.total_audio_processed
-            - self.audio_position
-        )
+        total_processed_with_current = self.total_audio_processed + self.audio_position
+        overall_remaining = self.total_audio_duration_all - total_processed_with_current
         total_elapsed_time = self.previous_elapsed_time + self.current_elapsed_time
+
+        # New calculation for overall elapsed wall-clock time
+        overall_wall_clock_elapsed = 0.0
+        if self.overall_start_time > 0:
+            overall_wall_clock_elapsed = time.perf_counter() - self.overall_start_time
 
         # Create debug table
         title = (
@@ -419,7 +415,7 @@ class DebugTracker:
             )
             debug_table.add_row(
                 "Total Audio Processed",
-                f"{self.total_audio_processed + self.audio_position:.2f}s",
+                f"{total_processed_with_current:.2f}s",
             )
             debug_table.add_row(
                 "Overall Remaining Duration", f"{overall_remaining:.2f}s"
@@ -427,17 +423,15 @@ class DebugTracker:
 
             if self.total_audio_duration_all > 0:
                 overall_progress = (
-                    (self.total_audio_processed + self.audio_position)
-                    / self.total_audio_duration_all
-                    * 100
+                    (total_processed_with_current) / self.total_audio_duration_all * 100
                 )
                 debug_table.add_row("Overall Progress", f"{overall_progress:.1f}%")
 
-            # Overall ETA
-            if self.audio_position > 0 and self.current_elapsed_time > 0:
-                rate = self.audio_position / self.current_elapsed_time
-                if rate > 0:
-                    overall_eta = overall_remaining / rate
+            # Overall ETA using overall transcription rate
+            if total_processed_with_current > 10 and overall_wall_clock_elapsed > 10:
+                overall_rate = total_processed_with_current / overall_wall_clock_elapsed
+                if overall_rate > 0:
+                    overall_eta = overall_remaining / overall_rate
                     debug_table.add_row(
                         "Overall Time Remaining",
                         f"{overall_eta:.1f}s ({overall_eta / 60:.1f}m)",
@@ -481,6 +475,12 @@ class DebugTracker:
                 debug_table.add_row("File Estimated Time Remaining", "0.0s (0.0m)")
         else:
             debug_table.add_row("File Estimated Time Remaining", "0.0s (0.0m)")
+
+        # Add the new metric
+        if total_processed_with_current > 10 and overall_wall_clock_elapsed > 10:
+            rate = total_processed_with_current / overall_wall_clock_elapsed
+            rate_display = f"{rate:.2f}x" if rate <= 100 else ">100.00x"
+            debug_table.add_row("Transcription Rate", rate_display)
 
         return debug_table
 
@@ -971,7 +971,8 @@ def process_single_file(
     total_audio_processed: float,
     progress_with_debug: Optional[ProgressWithDebug] = None,
     remaining_duration_column: Optional[RemainingAudioDurationColumn] = None,
-    estimated_total_duration: float = 0,
+    actual_total_duration: float = 0,
+    overall_start_time: float = 0.0,
 ) -> tuple[bool, float, float, int]:
     """
     Process a single audio file.
@@ -1035,7 +1036,8 @@ def process_single_file(
                 audio_file.name,
                 progress_with_debug if args.debug else None,
                 remaining_duration_column,
-                estimated_total_duration,
+                actual_total_duration,
+                overall_start_time,
             )
 
         # Close writers
@@ -1074,7 +1076,8 @@ def process_segments(
     file_name: str,
     progress_with_debug: Optional[ProgressWithDebug] = None,
     remaining_duration_column: Optional[RemainingAudioDurationColumn] = None,
-    estimated_total_duration: float = 0,
+    actual_total_duration: float = 0,
+    overall_start_time: float = 0.0,
 ) -> tuple[bool, int]:
     """Process all segments. Returns (success, segment_count)."""
     segment_count = 0
@@ -1109,75 +1112,20 @@ def process_segments(
             0.0,
             total_files,
             file_idx,
-            estimated_total_duration,
+            actual_total_duration,
             total_audio_processed,
         )
 
     # Initialize progress for this file
-    if file_idx == 0:
-        # First file - update with actual duration if different from estimate
-        current_total = progress.tasks[main_task].total
-        actual_total = total_audio_processed + info.duration
+    progress.update(
+        main_task,
+        description=f"[cyan]File {file_idx + 1}/{total_files}",
+        visible=True,
+    )
 
-        # For single file, use exact audio duration for main task
-        if total_files == 1:
-            progress.update(
-                main_task,
-                total=info.duration,
-                completed=audio_position,  # Start from checkpoint position
-                description=f"[cyan]File {file_idx + 1}/{total_files}",
-                visible=True,
-            )
-        else:
-            # Multiple files
-            if actual_total > current_total:
-                # Actual duration is more than estimate, update total
-                progress.update(main_task, total=actual_total)
-            progress.update(
-                main_task,
-                description=f"[cyan]File {file_idx + 1}/{total_files}",
-                visible=True,
-            )
-    else:
-        # For subsequent files, check if we need to expand the total
-        current_total = progress.tasks[main_task].total
-        actual_total = total_audio_processed + info.duration
-        if actual_total > current_total:
-            # Actual duration is more than estimate, update total
-            progress.update(main_task, total=actual_total)
-        progress.update(
-            main_task,
-            description=f"[cyan]File {file_idx + 1}/{total_files}",
-            visible=True,
-        )
-
-    # Set initial remaining audio duration for current file
-    # Use the progress bar's total for accurate remaining calculation
-    progress_total = progress.tasks[main_task].total
-    current_position = total_audio_processed + audio_position
-    initial_remaining = progress_total - current_position
-
-    # For single file, use actual file remaining for both tasks
-    if total_files == 1:
-        file_remaining = info.duration - audio_position
-        if remaining_duration_column:
-            remaining_duration_column.set_remaining_duration(main_task, file_remaining)
-            remaining_duration_column.set_remaining_duration(
-                segment_task, file_remaining
-            )
-    else:
-        # Multiple files: track separately
-        if remaining_duration_column:
-            remaining_duration_column.set_remaining_duration(
-                main_task, initial_remaining
-            )
-            # Also set for segment task to show remaining for current file
-            file_remaining = info.duration - audio_position
-            remaining_duration_column.set_remaining_duration(
-                segment_task, file_remaining
-            )
-
-    max(1, int(info.duration / SEGMENT_ESTIMATE_SECONDS))
+    if remaining_duration_column:
+        remaining_duration_column.set_eta(main_task, 0.0)
+        remaining_duration_column.set_eta(segment_task, 0.0)
 
     # For both single and multiple files, make segment task track audio position
     progress.update(
@@ -1222,32 +1170,45 @@ def process_segments(
                 segment_process_time = time.perf_counter() - segment_process_start
                 audio_position = segment.end
 
-                # Update remaining audio duration based on total progress
-                total_position = total_audio_processed + audio_position
-                progress_total = progress.tasks[main_task].total
-                total_remaining = progress_total - total_position
+                # Update ETA based on transcription rate
+                if remaining_duration_column:
+                    # Overall ETA for main_task
+                    total_processed_with_current = (
+                        total_audio_processed + audio_position
+                    )
+                    overall_wall_clock_elapsed = (
+                        time.perf_counter() - overall_start_time
+                    )
+                    overall_remaining_audio = (
+                        actual_total_duration - total_processed_with_current
+                    )
 
-                # For single file processing, use actual file remaining for both tasks
-                if total_files == 1:
-                    file_remaining = info.duration - audio_position
-                    if remaining_duration_column:
-                        remaining_duration_column.update_remaining_duration(
-                            main_task, file_remaining
+                    overall_eta = 0.0
+                    # Use a threshold to avoid unstable ETAs at the beginning
+                    if (
+                        total_processed_with_current > 10
+                        and overall_wall_clock_elapsed > 10
+                    ):
+                        overall_rate = (
+                            total_processed_with_current / overall_wall_clock_elapsed
                         )
-                        remaining_duration_column.update_remaining_duration(
-                            segment_task, file_remaining
-                        )
-                else:
-                    # Multiple files: track separately
-                    if remaining_duration_column:
-                        remaining_duration_column.update_remaining_duration(
-                            main_task, total_remaining
-                        )
-                        # Also update for segment task (current file remaining)
-                        file_remaining = info.duration - audio_position
-                        remaining_duration_column.update_remaining_duration(
-                            segment_task, file_remaining
-                        )
+                        if overall_rate > 0:
+                            overall_eta = overall_remaining_audio / overall_rate
+                    remaining_duration_column.set_eta(main_task, overall_eta)
+
+                    # File-specific ETA for segment_task
+                    current_file_wall_clock_elapsed = (
+                        time.perf_counter() - session_start_time
+                    )
+                    file_remaining_audio = info.duration - audio_position
+
+                    file_eta = 0.0
+                    # Use a threshold for file-specific ETA as well
+                    if audio_position > 5 and current_file_wall_clock_elapsed > 5:
+                        file_rate = audio_position / current_file_wall_clock_elapsed
+                        if file_rate > 0:
+                            file_eta = file_remaining_audio / file_rate
+                    remaining_duration_column.set_eta(segment_task, file_eta)
 
                 # Track debug data
                 if debug_tracker:
@@ -1300,7 +1261,7 @@ def process_segments(
                         current_elapsed_time,
                         total_files,
                         file_idx,
-                        estimated_total_duration,
+                        actual_total_duration,
                         total_audio_processed,
                     )
 
@@ -1315,8 +1276,8 @@ def process_segments(
 
         # Set remaining duration to 0 when complete
         if remaining_duration_column:
-            remaining_duration_column.set_remaining_duration(main_task, 0)
-            remaining_duration_column.set_remaining_duration(segment_task, 0)
+            remaining_duration_column.set_eta(main_task, 0)
+            remaining_duration_column.set_eta(segment_task, 0)
 
         # Ensure progress bars show 100% completion
         if total_files == 1:
@@ -1336,7 +1297,7 @@ def process_segments(
                 final_elapsed_time,
                 total_files,
                 file_idx,
-                estimated_total_duration,
+                actual_total_duration,
                 total_audio_processed,
             )
 
@@ -1450,19 +1411,6 @@ def display_final_results(
     console.print("\n")
 
 
-def estimate_audio_duration(file_path: Path) -> float:
-    """Estimate audio duration based on file size (rough approximation)."""
-    # Conservative estimate: 1MB ≈ 10 seconds for typical audio
-    # This is just for initial progress estimation and will be corrected
-    # with actual duration once transcription starts
-    try:
-        file_size_mb = file_path.stat().st_size / (1024 * 1024)
-        # Use a more conservative estimate to avoid huge overestimates
-        return file_size_mb * 10
-    except Exception:
-        return 60  # Default to 1 minute if can't read file
-
-
 def run_file_transcription(args):
     """Run file transcription with streaming output and resume capability."""
     # Install global interrupt handler immediately
@@ -1494,6 +1442,25 @@ def run_file_transcription(args):
                 "No Input Directory",
             )
             return
+
+        # Get actual total duration for all files
+        actual_total_duration = 0
+        with console.status(
+            "[cyan]Analyzing audio files...", spinner="dots12"
+        ) as status:
+            for i, audio_file in enumerate(audio_files, 1):
+                status.update(
+                    f"[cyan]Analyzing audio file {i}/{len(audio_files)}: {audio_file.name}"
+                )
+                duration = get_actual_audio_duration(audio_file)
+                if duration > 0:
+                    actual_total_duration += duration
+                else:
+                    console.print(
+                        f"[yellow]Warning: Could not get duration for {audio_file.name}. "
+                        "Overall progress may be inaccurate.[/yellow]"
+                    )
+        console.print("[green]✓[/green] Analysis complete.")
 
         # Create output directory if specified
         try:
@@ -1532,7 +1499,6 @@ def run_file_transcription(args):
 
         # Check all checkpoints BEFORE starting the progress display
         checkpoints_info = []
-        estimated_total_duration = 0
         for audio_file in audio_files:
             checkpoint = TranscriptionCheckpoint(audio_file)
             resume_from_checkpoint, checkpoint_start_position = (
@@ -1545,8 +1511,6 @@ def run_file_transcription(args):
                     "start_position": checkpoint_start_position,
                 }
             )
-            # Estimate duration for progress tracking
-            estimated_total_duration += estimate_audio_duration(audio_file)
 
         # Create progress with debug display
         progress_with_debug = ProgressWithDebug(args.debug)
@@ -1555,6 +1519,10 @@ def run_file_transcription(args):
             # Get the progress object and remaining duration column
             if args.debug:
                 progress = progress_with_debug.start()
+                if progress_with_debug.debug_tracker:
+                    progress_with_debug.debug_tracker.overall_start_time = (
+                        overall_start_time
+                    )
                 remaining_duration_column = (
                     progress_with_debug.remaining_duration_column
                 )
@@ -1567,7 +1535,7 @@ def run_file_transcription(args):
             # Main task for overall progress
             main_task = progress.add_task(
                 "[cyan]Preparing transcription...",
-                total=estimated_total_duration,  # Use estimated total
+                total=actual_total_duration,  # Use actual total
                 completed=0,
                 visible=True,  # Show from the start
             )
@@ -1608,7 +1576,8 @@ def run_file_transcription(args):
                         total_audio_processed,
                         progress_with_debug if args.debug else None,
                         remaining_duration_column,
-                        estimated_total_duration,
+                        actual_total_duration,
+                        overall_start_time,
                     )
                 )
 
