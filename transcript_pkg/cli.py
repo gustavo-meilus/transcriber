@@ -43,7 +43,7 @@ def add_live_subparser(subparsers) -> argparse.ArgumentParser:
     live_parser = subparsers.add_parser(
         "live",
         help="Transcribe live audio from system audio device",
-        description="Capture and transcribe audio from your TAE2146 audio device in real-time",
+        description="Capture and transcribe audio from your selected audio input device in real-time",
         add_help=False,
     )
 
@@ -68,21 +68,56 @@ def add_live_subparser(subparsers) -> argparse.ArgumentParser:
     )
 
     live_parser.add_argument(
+        "--device",
+        "-d",
+        type=int,
+        help="Audio input device index (skip interactive selection)",
+    )
+
+    live_parser.add_argument(
+        "--no-tae2146",
+        action="store_true",
+        help="Don't prefer TAE2146 device (go straight to device selection)",
+    )
+
+    live_parser.add_argument(
         "--multilingual",
         action="store_true",
-        help="Enable language detection for each segment",
+        default=True,
+        help="Enable language detection for each segment (default: enabled)",
+    )
+
+    live_parser.add_argument(
+        "--no-multilingual",
+        action="store_false",
+        dest="multilingual",
+        help="Disable multilingual mode",
     )
 
     live_parser.add_argument(
         "--output",
         "-o",
-        help="Output file for live transcription",
+        help="Output file base name (extension will be added based on format)",
+    )
+
+    live_parser.add_argument(
+        "--format",
+        "-f",
+        choices=OUTPUT_FORMATS,
+        default="txt",
+        help="Output format (default: txt)",
     )
 
     live_parser.add_argument(
         "--no-timestamps",
         action="store_true",
-        help="Do not include timestamps in transcription output",
+        help="Do not include timestamps in transcription output (TXT only)",
+    )
+
+    live_parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug mode with detailed statistics",
     )
 
     live_parser.add_argument(
@@ -111,8 +146,8 @@ def add_file_subparser(subparsers) -> argparse.ArgumentParser:
         "--language",
         "-l",
         choices=LANGUAGES,
-        default="auto",
-        help="Language for transcription (default: auto)",
+        default="en",
+        help="Language for transcription (default: en)",
     )
 
     file_parser.add_argument(
@@ -148,7 +183,15 @@ def add_file_subparser(subparsers) -> argparse.ArgumentParser:
     file_parser.add_argument(
         "--multilingual",
         action="store_true",
-        help="Enable language detection for each segment",
+        default=True,
+        help="Enable language detection for each segment (default: enabled)",
+    )
+
+    file_parser.add_argument(
+        "--no-multilingual",
+        action="store_false",
+        dest="multilingual",
+        help="Disable multilingual mode",
     )
 
     file_parser.add_argument(
@@ -169,23 +212,28 @@ def add_file_subparser(subparsers) -> argparse.ArgumentParser:
 def show_examples():
     """Display examples in rich format."""
     console.print("\n[bright_cyan]Examples:[/bright_cyan]")
-    console.print("  [green]# Live transcription in English[/green]")
-    console.print("  transcript live --language en")
+    console.print(
+        "  [green]# Live transcription (English with multilingual detection)[/green]"
+    )
+    console.print("  transcript live")
+    console.print("")
+    console.print("  [green]# Live transcription without multilingual mode[/green]")
+    console.print("  transcript live --no-multilingual")
+    console.print("")
+    console.print("  [green]# Live transcription with auto language detection[/green]")
+    console.print("  transcript live --language auto")
     console.print("")
     console.print("  [green]# Live transcription with output file[/green]")
     console.print("  transcript live --output session.txt")
     console.print("")
-    console.print("  [green]# Live multilingual transcription[/green]")
-    console.print("  transcript live --multilingual")
-    console.print("")
-    console.print("  [green]# Transcribe files with auto-detection[/green]")
+    console.print("  [green]# Transcribe files (English with multilingual)[/green]")
     console.print("  transcript file")
     console.print("")
     console.print("  [green]# Transcribe a single audio file[/green]")
     console.print("  transcript file --input audio.mp3")
     console.print("")
-    console.print("  [green]# Transcribe files in Portuguese with SRT output[/green]")
-    console.print("  transcript file --language pt --format srt")
+    console.print("  [green]# Transcribe files in Portuguese only[/green]")
+    console.print("  transcript file --language pt --no-multilingual")
     console.print("")
     console.print("  [green]# Use larger model for better accuracy[/green]")
     console.print("  transcript live --model large")

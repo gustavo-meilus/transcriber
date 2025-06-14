@@ -91,27 +91,61 @@ python -m transcript_pkg.cli [command] [options]
 
 ## 🎤 Live Audio Transcription
 
-Captures and transcribes audio from your TAE2146 audio device in real-time.
+Captures and transcribes audio from your selected audio input device in real-time.
 
 ### Basic Usage
 
 ```bash
-# English transcription (default)
+# Start with interactive device selection (English + multilingual by default)
 transcript live
+
+# Use a specific device by index
+transcript live --device 2
+
+# Disable multilingual mode (English only)
+transcript live --no-multilingual
+
+# Auto-detect primary language
+transcript live --language auto
 
 # Portuguese transcription
 transcript live --language pt
 
-# Auto-detect language
-transcript live --language auto
-
-# Multilingual (detects language changes)
-transcript live --multilingual
+# Pure single-language mode (no language tags)
+transcript live --language pt --no-multilingual
 ```
+
+### Device Selection
+
+When you run `transcript live` without the `--device` flag, you'll see an interactive menu to select your audio input device:
+
+```
+🎤 Available Audio Input Devices
+┌────────┬──────────────────────────────────────────────────┬──────────┬─────────────┐
+│ Index  │ Device Name                                      │ Channels │ Sample Rate │
+├────────┼──────────────────────────────────────────────────┼──────────┼─────────────┤
+│   0    │ Built-in Microphone                              │    2     │   48,000 Hz │
+│   1    │ USB Headset Microphone                           │    1     │   44,100 Hz │
+│   2    │ Monitor of Built-in Audio (System Audio)         │    2     │   48,000 Hz │
+│   3    │ TAE2146 USB Audio Device (Recommended)           │    2     │   48,000 Hz │
+└────────┴──────────────────────────────────────────────────┴──────────┴─────────────┘
+
+💡 Tip: Devices with 'monitor' in the name can capture system audio.
+
+Select device by index:
+```
+
+If you have a TAE2146 device, it will be detected automatically and you'll be asked if you want to use it.
 
 ### Advanced Options
 
 ```bash
+# Use a specific device directly (skip menu)
+transcript live --device 2
+
+# Skip TAE2146 auto-detection
+transcript live --no-tae2146
+
 # Use a larger model for better accuracy
 transcript live --model large
 
@@ -121,21 +155,40 @@ transcript live --output session.txt
 # Save without timestamps
 transcript live --output session.txt --no-timestamps
 
+# Save in multiple formats
+transcript live --output session --format all
+
+# Enable debug mode for performance stats
+transcript live --debug
+
 # Combine options
-transcript live --language auto --multilingual --model small --output meeting.txt
+transcript live -d 2 --language auto --multilingual --model small --output meeting
 ```
 
 ### Features
 
-- **Real-time transcription** of system audio
+- **Interactive device selection** - Choose from all available audio input devices
+- **Direct device selection** - Skip menu with `--device` flag
+- **Real-time transcription** of selected audio source
 - **Language detection** (English, Portuguese, or automatic)
 - **Multilingual mode** - detects and labels language changes within the audio
+- **Multiple output formats** - TXT, SRT, VTT, or all formats simultaneously
 - **Session summary** - displays comprehensive statistics when stopped (Ctrl+C)
 - **Multiple model sizes** - balance speed vs accuracy
 - **Live dashboard** - animated status display with real-time stats
-- **File output** - optionally save transcriptions to a file with timestamps
-- **Streaming write** - output file updated in real-time as segments are transcribed
+- **Debug mode** - detailed performance statistics for troubleshooting
+- **Streaming write** - output files updated in real-time as segments are transcribed
 - **Graceful shutdown** - transcripts are saved even when interrupted (Ctrl+C)
+- **Session checkpoints** - automatic progress saving every 10 transcriptions
+
+### System Audio Capture
+
+To capture system audio (what's playing through your speakers):
+
+- Look for devices with "monitor" in the name
+- On Linux: Use "Monitor of" devices (PulseAudio/PipeWire)
+- On Windows: May need to enable "Stereo Mix" in sound settings
+- On macOS: May need additional software like BlackHole or Loopback
 
 ### Session Summary
 
@@ -404,9 +457,15 @@ transcript live [options]
 Options:
   --language, -l {en,pt,auto}  Language for transcription (default: en)
   --model, -m {tiny,base,small,medium,large}  Model size (default: base)
-  --multilingual  Enable per-segment language detection
-  --output, -o PATH  Save transcription to file
-  --no-timestamps  Do not include timestamps in output file
+  --device, -d INDEX  Audio input device index (skip interactive selection)
+  --no-tae2146  Don't prefer TAE2146 device (go straight to device selection)
+  --multilingual  Enable language detection for each segment (default: enabled)
+  --no-multilingual  Disable multilingual mode
+  --output, -o PATH  Save transcription to file base name
+  --format, -f {txt,srt,vtt,all}  Output format (default: txt)
+  --no-timestamps  Do not include timestamps in output file (TXT only)
+  --debug  Enable debug mode with detailed statistics
+  --cpu  Force CPU usage even if GPU is available
 ```
 
 ### File Mode Options
@@ -415,13 +474,15 @@ Options:
 transcript file [options]
 
 Options:
-  --language, -l {en,pt,auto}  Language for transcription (default: auto)
+  --language, -l {en,pt,auto}  Language for transcription (default: en)
   --model, -m {tiny,base,small,medium,large}  Model size (default: base)
   --input, -i PATH  Input file or folder (default: ./input)
   --output, -o PATH  Output folder (default: same as input)
   --format, -f {txt,srt,vtt,all}  Output format (default: txt)
-  --multilingual  Enable per-segment language detection
+  --multilingual  Enable language detection for each segment (default: enabled)
+  --no-multilingual  Disable multilingual mode
   --debug  Enable debug mode with detailed statistics (for developers)
+  --cpu  Force CPU usage even if GPU is available
 ```
 
 ## ⚙️ Configuration
@@ -464,9 +525,14 @@ transcript file --model large
 transcript file --model large --cpu
 ```
 
-### Audio Device
+### Audio Device Selection
 
-The live transcription is configured for the TAE2146 audio device. To use a different device, modify the device selection in `transcript_pkg/live_transcribe.py`.
+The live transcription supports all available audio input devices on your system:
+
+- **Interactive Selection** - Choose from a menu of available devices when starting
+- **Direct Selection** - Use `--device INDEX` to select a specific device
+- **TAE2146 Support** - Automatically detects and offers TAE2146 devices when available
+- **System Audio** - Look for "monitor" devices to capture system audio
 
 ## 📊 Tested Performance
 
@@ -515,8 +581,8 @@ transcriber/
 ## 📋 Requirements
 
 - Python 3.9+
-- PulseAudio or PipeWire (for system audio capture)
-- TAE2146 audio device (or modify for your device)
+- PulseAudio or PipeWire (for system audio capture on Linux)
+- Any audio input device (microphone, system audio monitor, etc.)
 
 ## 🤝 Contributing
 
