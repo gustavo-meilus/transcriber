@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import queue
 import subprocess
 import threading
 import time
@@ -955,25 +956,6 @@ def show_ready_panel(
     )
 
 
-def process_audio_buffer(
-    audio_buffer: list[float], buffer_lock: threading.Lock, buffer_size: int
-) -> Optional[np.ndarray]:
-    """Process audio buffer and return audio data if ready."""
-    with buffer_lock:
-        if len(audio_buffer) < buffer_size:
-            return None
-
-        # Get audio data and clear buffer
-        audio_data = np.array(audio_buffer[:buffer_size], dtype=np.float32)
-        audio_buffer[:buffer_size] = []
-
-    # Skip if audio is too quiet
-    if np.max(np.abs(audio_data)) < SILENCE_THRESHOLD:
-        return None
-
-    return audio_data
-
-
 def process_transcription_segments(
     segments_list: list,
     args,
@@ -1042,6 +1024,7 @@ class AudioTranscriber:
         self.checkpoint = checkpoint
         self.audio_buffer = []
         self.buffer_lock = threading.Lock()
+        self.transcription_queue = queue.Queue()
         self.running = True
         self.transcribing = False
 
@@ -1053,12 +1036,16 @@ class AudioTranscriber:
         self.transcription_count = 0
 
     def add_audio(self, audio_data: np.ndarray):
-        """Add audio data to buffer."""
+        """Add audio data to buffer and queue it for transcription when full."""
         with self.buffer_lock:
             self.audio_buffer.extend(audio_data)
-            # Track buffer size for debug
-            if self.ui.debug_tracker:
-                self.ui.debug_tracker.add_buffer_size(len(self.audio_buffer))
+            if len(self.audio_buffer) >= BUFFER_SIZE:
+                chunk = np.array(self.audio_buffer[:BUFFER_SIZE], dtype=np.float32)
+                self.transcription_queue.put(chunk)
+                self.audio_buffer = self.audio_buffer[BUFFER_SIZE:]
+
+                if self.ui.debug_tracker:
+                    self.ui.debug_tracker.add_buffer_size(len(self.audio_buffer))
 
     def stop(self):
         """Stop the transcription thread."""
@@ -1069,15 +1056,17 @@ class AudioTranscriber:
         checkpoint_counter = 0
 
         while self.running:
-            time.sleep(BUFFER_DURATION)
+            try:
+                # Wait for a chunk of audio from the queue.
+                # Timeout to check self.running periodically.
+                audio_data = self.transcription_queue.get(timeout=1)
+            except queue.Empty:
+                self.ui.update_status("👂 Listening for audio...", "green")
+                continue
 
-            # Process audio buffer
-            audio_data = process_audio_buffer(
-                self.audio_buffer, self.buffer_lock, BUFFER_SIZE
-            )
-
-            if audio_data is None:
-                self.ui.update_status("🔇 Waiting for audio...", "dim")
+            # Skip if audio is too quiet
+            if np.max(np.abs(audio_data)) < SILENCE_THRESHOLD:
+                self.ui.update_status("🔇 Silence detected, skipping...", "dim")
                 if self.ui.debug_tracker:
                     self.ui.debug_tracker.add_silence_period()
                 continue
