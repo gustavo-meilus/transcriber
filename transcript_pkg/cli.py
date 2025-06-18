@@ -74,9 +74,9 @@ def add_live_subparser(subparsers) -> argparse.ArgumentParser:
     )
 
     live_parser.add_argument(
-        "--no-tae2146",
+        "--no-auto-detect",
         action="store_true",
-        help="Don't prefer TAE2146 device (go straight to device selection)",
+        help="Disable automatic detection of preferred audio device.",
     )
 
     live_parser.add_argument(

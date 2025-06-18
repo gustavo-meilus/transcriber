@@ -314,66 +314,57 @@ class DebugTracker:
             rate = audio_duration / real_duration
             self.transcription_rates.append(rate)
 
-    def build_table(self, stats: dict) -> Table:
-        """Build the debug statistics table."""
-        debug_table = Table(
-            title="🔧 Live Transcription Debug",
-            show_header=True,
-            header_style="bold magenta",
-            border_style="magenta",
-        )
+    def get_debug_rows(self, stats: dict) -> list[tuple[str, str]]:
+        """Return a list of styled rows for the debug table."""
+        rows = []
 
-        debug_table.add_column("Metric", style="cyan", width=35)
-        debug_table.add_column("Value", style="yellow", justify="right")
+        # Performance metrics
+        if self.transcription_times:
+            avg_time = sum(self.transcription_times) / len(self.transcription_times)
+            rows.append(
+                ("[magenta]Avg Transcription Time[/magenta]", f"{avg_time:.2f}s")
+            )
+            rows.append(
+                (
+                    "[magenta]Last Transcription Time[/magenta]",
+                    f"{self.last_transcription_time:.2f}s",
+                )
+            )
 
-        # Session info
-        session_duration = time.time() - self.session_start
-        debug_table.add_row(
-            "Session Duration", format_duration_hhmmss(session_duration)
-        )
-        debug_table.add_row("Total Transcriptions", str(stats.get("transcriptions", 0)))
-        debug_table.add_row("Total Segments", str(stats.get("segments", 0)))
+        if self.transcription_rates:
+            avg_rate = sum(self.transcription_rates) / len(self.transcription_rates)
+            rows.append(
+                ("[magenta]Avg Processing Rate[/magenta]", f"{avg_rate:.1f}x realtime")
+            )
 
         # Audio processing
-        debug_table.add_row("─" * 35, "─" * 20, style="dim")
-        debug_table.add_row("Audio Buffer Duration", f"{BUFFER_DURATION}s")
+        rows.append(("[magenta]Audio Buffer[/magenta]", f"{BUFFER_DURATION}s"))
 
         if self.audio_buffer_sizes:
             avg_buffer = sum(self.audio_buffer_sizes) / len(self.audio_buffer_sizes)
-            debug_table.add_row(
-                "Avg Buffer Fill", f"{avg_buffer / BUFFER_SIZE * 100:.1f}%"
+            rows.append(
+                (
+                    "[magenta]Avg Buffer Fill[/magenta]",
+                    f"{avg_buffer / BUFFER_SIZE * 100:.1f}%",
+                )
             )
 
         total_periods = self.silence_periods + self.active_periods
         if total_periods > 0:
             silence_pct = self.silence_periods / total_periods * 100
-            debug_table.add_row(
-                "Silence Periods", f"{self.silence_periods} ({silence_pct:.1f}%)"
+            rows.append(
+                (
+                    "[magenta]Silence Periods[/magenta]",
+                    f"{self.silence_periods} ({silence_pct:.1f}%)",
+                )
             )
-            debug_table.add_row(
-                "Active Periods", f"{self.active_periods} ({100 - silence_pct:.1f}%)"
-            )
-
-        # Performance metrics
-        debug_table.add_row("─" * 35, "─" * 20, style="dim")
-        if self.transcription_times:
-            avg_time = sum(self.transcription_times) / len(self.transcription_times)
-            debug_table.add_row("Avg Transcription Time", f"{avg_time:.2f}s")
-            debug_table.add_row(
-                "Last Transcription Time", f"{self.last_transcription_time:.2f}s"
-            )
-
-        if self.transcription_rates:
-            avg_rate = sum(self.transcription_rates) / len(self.transcription_rates)
-            debug_table.add_row("Avg Processing Rate", f"{avg_rate:.1f}x realtime")
 
         # Language detection
         if stats.get("languages"):
-            debug_table.add_row("─" * 35, "─" * 20, style="dim")
             lang_str = ", ".join([f"{k}:{v}" for k, v in stats["languages"].items()])
-            debug_table.add_row("Languages Detected", lang_str)
+            rows.append(("[magenta]Languages Detected[/magenta]", lang_str))
 
-        return debug_table
+        return rows
 
 
 class TranscriptionUI:
@@ -382,7 +373,9 @@ class TranscriptionUI:
     def __init__(self, debug_enabled: bool = False):
         self.debug_enabled = debug_enabled
         self.layout = Layout()
-        self.transcription_text = Text()
+        self.transcription_text = Text(
+            "Waiting for speech...", justify="center", style="dim"
+        )
         self.status_text = "Initializing..."
         self.status_style = "yellow"
         self.stats = {
@@ -398,17 +391,12 @@ class TranscriptionUI:
     def setup_layout(self):
         """Setup the layout structure."""
         if self.debug_enabled:
-            # Layout with debug panel
+            # Layout with a larger stats panel for debug info
             self.layout.split_column(
                 Layout(name="header", size=3),
                 Layout(name="main", ratio=1),
                 Layout(name="status", size=3),
-                Layout(name="bottom", size=16),  # Stats + Debug
-            )
-            # Split bottom into stats and debug
-            self.layout["bottom"].split_row(
-                Layout(name="stats", ratio=1),
-                Layout(name="debug", ratio=1),
+                Layout(name="stats", size=16),  # Expanded for debug
             )
         else:
             # Standard layout without debug
@@ -419,9 +407,14 @@ class TranscriptionUI:
                 Layout(name="stats", size=8),
             )
 
-    def update_header(self):
-        """Update the header panel."""
-        header = Panel(
+        # Initialize panels
+        self.layout["header"].update(self.create_header_panel())
+        self.layout["main"].update(self.create_transcription_panel())
+        self.layout["status"].update(self.create_status_panel())
+
+    def create_header_panel(self):
+        """Create the header panel."""
+        return Panel(
             Align.center(
                 Text("🎙️  LIVE TRANSCRIPTION", style="bold bright_cyan"),
                 vertical="middle",
@@ -429,45 +422,59 @@ class TranscriptionUI:
             border_style="bright_cyan",
             box=box.DOUBLE,
         )
-        self.layout["header"].update(header)
 
-    def update_transcription(self, text, language=None):
-        """Update the transcription display."""
-        if language:
-            styled_text = f"[bright_green][{language}][/bright_green] {text}"
-        else:
-            styled_text = text
+    def create_transcription_panel(self):
+        """Create the main transcription panel."""
+        content = self.transcription_text
+        # Center placeholder text, left-align transcription
+        if "Waiting for speech" in content.plain:
+            content = Align.center(content, vertical="middle")
 
-        # Keep last 5 transcriptions (or more in debug mode)
-        max_lines = 10 if self.debug_enabled else 5
-        lines = self.transcription_text.plain.split("\n")
-        if len(lines) > max_lines:
-            lines = lines[-max_lines:]
-        lines.append(styled_text)
-
-        self.transcription_text = Text("\n".join(lines))
-
-        panel = Panel(
-            self.transcription_text,
+        return Panel(
+            content,
             title="[bold]Transcription[/bold]",
             border_style="green",
             padding=(1, 2),
         )
-        self.layout["main"].update(panel)
 
-    def update_status(self, status, style="yellow"):
-        """Update the status display."""
-        self.status_text = status
-        self.status_style = style
-
-        status_panel = Panel(
+    def create_status_panel(self):
+        """Create the status panel."""
+        return Panel(
             Align.center(
                 Text(self.status_text, style=self.status_style), vertical="middle"
             ),
             border_style=self.status_style,
             height=3,
         )
-        self.layout["status"].update(status_panel)
+
+    def update_transcription(self, text, language=None):
+        """Update the transcription display."""
+        # On first transcription, clear the placeholder text
+        if "Waiting for speech..." in self.transcription_text.plain:
+            self.transcription_text = Text()
+            lines = []
+        else:
+            lines = self.transcription_text.plain.split("\n")
+
+        if language:
+            styled_text = f"[bright_green][{language}][/bright_green] {text}"
+        else:
+            styled_text = text
+
+        # Keep last N transcriptions
+        max_lines = 10 if self.debug_enabled else 5
+        if len(lines) >= max_lines:
+            lines = lines[-(max_lines - 1) :]
+        lines.append(styled_text)
+
+        self.transcription_text = Text("\n".join(lines), justify="left")
+        self.layout["main"].update(self.create_transcription_panel())
+
+    def update_status(self, status, style="yellow"):
+        """Update the status display."""
+        self.status_text = status
+        self.status_style = style
+        self.layout["status"].update(self.create_status_panel())
 
     def update_stats(
         self, duration=None, transcriptions=None, segments=None, language=None
@@ -497,7 +504,7 @@ class TranscriptionUI:
         stats_table.add_row("🎯 Transcriptions", str(self.stats["transcriptions"]))
         stats_table.add_row("📝 Segments", str(self.stats["segments"]))
 
-        if self.stats["languages"]:
+        if self.stats["languages"] and not self.debug_enabled:
             lang_str = ", ".join(
                 [f"{lang}: {count}" for lang, count in self.stats["languages"].items()]
             )
@@ -505,19 +512,22 @@ class TranscriptionUI:
 
         stats_table.add_row("🕐 Last Update", self.stats["last_update"])
 
+        # Add debug info if enabled
+        if self.debug_enabled and self.debug_tracker:
+            stats_table.add_row("─" * 20, "─" * 20, style="dim")
+            stats_table.add_row("[bold magenta]🔧 Debug Info[/bold magenta]", "")
+
+            debug_rows = self.debug_tracker.get_debug_rows(self.stats)
+            for metric, value in debug_rows:
+                stats_table.add_row(metric, value)
+
         stats_panel = Panel(
             stats_table, title="[bold]Statistics[/bold]", border_style="cyan"
         )
         self.layout["stats"].update(stats_panel)
 
-        # Update debug panel if enabled
-        if self.debug_enabled and self.debug_tracker:
-            debug_table = self.debug_tracker.build_table(self.stats)
-            self.layout["debug"].update(debug_table)
-
     def get_layout(self):
         """Get the current layout."""
-        self.update_header()
         return self.layout
 
 
@@ -660,16 +670,13 @@ def display_device_selection_menu(devices: list[tuple[int, str, int, int]]) -> i
 
 
 def get_audio_device(
-    device_arg: Optional[int] = None, prefer_tae2146: bool = True
+    device_arg: Optional[int] = None, auto_detect: bool = True
 ) -> tuple[int, str]:
     """Get audio device based on user preference or interactive selection.
 
     Args:
         device_arg: Device index from command line argument
-        prefer_tae2146: If True and no device specified, try TAE2146 first
-
-    Returns:
-        Tuple of (device_index, device_name)
+        auto_detect: If True and no device specified, try to find a preferred device.
     """
     # If device index is provided via command line, use it
     if device_arg is not None:
@@ -687,15 +694,15 @@ def get_audio_device(
         except Exception as e:
             console.print(f"[red]Error: Invalid device index {device_arg}: {e}[/red]")
 
-    # If prefer_tae2146 is True, try to find TAE2146 first
-    if prefer_tae2146 and device_arg is None:
-        # Try to get TAE2146 device
-        device_index, device_name = get_tae2146_monitor_device()
-        if device_index != "pulse":  # If we found a specific device
-            # Ask user if they want to use TAE2146 or select another device
+    # If auto_detect is True, try to find a preferred device
+    if auto_detect and device_arg is None:
+        preferred_device = find_preferred_device()
+        if preferred_device:
+            device_index, device_name = preferred_device
+            # Ask user if they want to use this device or select another
             console.print(
                 Panel(
-                    f"[green]Found TAE2146 device:[/green] {device_name}\n\n"
+                    f"[green]Found preferred device:[/green] {device_name}\n\n"
                     "[yellow]Would you like to use this device or select another?[/yellow]",
                     title="[bold]Device Found[/bold]",
                     border_style="green",
@@ -704,8 +711,8 @@ def get_audio_device(
 
             from rich.prompt import Confirm
 
-            use_tae = Confirm.ask("Use TAE2146 device?", default=True)
-            if use_tae:
+            use_preferred = Confirm.ask("Use this device?", default=True)
+            if use_preferred:
                 return device_index, device_name
 
     # Show device selection menu
@@ -721,65 +728,45 @@ def get_audio_device(
     return selected_device[0], selected_device[1]
 
 
-# Get the TAE2146 monitor device
-def get_tae2146_monitor_device() -> tuple[str, str]:
-    """Get the TAE2146 monitor device specifically."""
-    # First, try to use the exact name directly
-    device_index, device_name = try_exact_device_match()
-    if device_index is not None:
-        return device_index, device_name
+def find_preferred_device() -> Optional[tuple[int, str]]:
+    """Find a preferred audio device based on a list of keywords.
 
-    # If not found by exact name, search through devices
-    device_index, device_name = search_device_by_name()
-    if device_index is not None:
-        return device_index, device_name
-
-    # If still not found, return pulse as fallback
-    return "pulse", "pulse (TAE2146 not found)"
-
-
-def try_exact_device_match() -> tuple[Optional[str], Optional[str]]:
-    """Try to match device by exact name."""
-    try:
-        sd.query_devices(TARGET_MONITOR)
-        console.print("[green]✓[/green] Found TAE2146 monitor device directly")
-        return TARGET_MONITOR, TARGET_MONITOR
-    except Exception:
-        return None, None
-
-
-def search_device_by_name() -> tuple[Optional[int], Optional[str]]:
-    """Search for TAE2146 device in available devices."""
+    Searches for devices with names containing keywords like 'TAE2146', 'monitor',
+    'stereo mix', etc. It returns the highest-priority device found.
+    """
     try:
         devices = sd.query_devices()
-        for i, device in enumerate(devices):
-            # Look for TAE2146 monitor in device name
-            if "TAE2146" in device["name"] and "monitor" in device["name"].lower():
-                console.print(
-                    f"[green]✓[/green] Found TAE2146 monitor at index {i}: {device['name']}"
-                )
-                return i, device["name"]
-            # Also check for partial matches
-            elif "TAE2146" in device["name"] and device["max_input_channels"] > 0:
-                console.print(
-                    f"[green]✓[/green] Found TAE2146 input device at index {i}: {device['name']}"
-                )
-                return i, device["name"]
     except Exception as e:
-        console.print(f"[yellow]⚠[/yellow] Error searching for TAE2146: {e}")
+        console.print(f"[yellow]⚠[/yellow] Could not query audio devices: {e}")
+        return None
 
-    return None, None
+    # Keywords with priority (lower is better)
+    search_terms = {
+        "TAE2146": 1,
+        "monitor": 2,
+        "stereo mix": 2,
+        "what u hear": 2,
+        "loopback": 2,
+    }
 
+    found_devices = []
+    for i, device in enumerate(devices):
+        if device.get("max_input_channels", 0) == 0:
+            continue
 
-def setup_pulseaudio_source():
-    """Try to set PulseAudio default source to TAE2146 monitor."""
-    try:
-        subprocess.run(["pactl", "set-default-source", TARGET_MONITOR], check=True)
-        console.print(
-            "[green]✓[/green] Set PulseAudio default source to TAE2146 monitor"
-        )
-    except Exception as e:
-        console.print(f"[yellow]Note:[/yellow] Could not set default source: {e}")
+        device_name_lower = device["name"].lower()
+        for term, priority in search_terms.items():
+            if term in device_name_lower:
+                found_devices.append((priority, i, device["name"]))
+                break  # Found a match, go to the next device
+
+    if not found_devices:
+        return None
+
+    # Sort by priority, then device index, and return the best match
+    found_devices.sort()
+    best_match = found_devices[0]
+    return best_match[1], best_match[2]  # (device_index, device_name)
 
 
 def get_device_configuration(device_index) -> tuple[int, int, float]:
@@ -1163,7 +1150,7 @@ def run_live_transcription(args):
         try:
             device_index, device_name = get_audio_device(
                 device_arg=args.device,
-                prefer_tae2146=not args.no_tae2146,  # Add option to disable TAE2146 preference
+                auto_detect=not args.no_auto_detect,
             )
         except (KeyboardInterrupt, ValueError) as e:
             if isinstance(e, KeyboardInterrupt):
@@ -1195,10 +1182,6 @@ def run_live_transcription(args):
 
         # Load model
         model = load_whisper_model(args.model, getattr(args, "cpu", False))
-
-        # If using pulse with TAE2146, try to set the default source
-        if device_index == "pulse" and "TAE2146" in device_name:
-            setup_pulseaudio_source()
 
         # Display configuration
         display_configuration(
@@ -1407,9 +1390,9 @@ if __name__ == "__main__":
         help="Audio input device index (skip interactive selection)",
     )
     parser.add_argument(
-        "--no-tae2146",
+        "--no-auto-detect",
         action="store_true",
-        help="Don't prefer TAE2146 device (go straight to device selection)",
+        help="Disable automatic detection of preferred audio device.",
     )
     parser.add_argument(
         "--multilingual",
